@@ -1,0 +1,11 @@
+[package]
+name = "artifacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+application = { workspace = true }
+domain = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
