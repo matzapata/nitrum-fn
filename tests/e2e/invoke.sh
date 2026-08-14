@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end: start host → build hello-world → CLI publish → invoke (warm after deploy).
+# End-to-end: Floci (S3) + DynamoDB Local → host → build hello-world → CLI publish → invoke.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -7,11 +7,14 @@ cd "$ROOT"
 
 PORT="${NITRUM_FN_E2E_PORT:-18090}"
 DATA_DIR="${NITRUM_FN_E2E_DATA:-$ROOT/.data/e2e}"
-ARTIFACT_DIR="$DATA_DIR/artifacts"
-CATALOG_PATH="$DATA_DIR/catalog.json"
 HOST_LOG="$DATA_DIR/host.log"
 HOST_PID=""
+COMPOSE_UP=0
 URL="http://127.0.0.1:${PORT}"
+FLOCI_URL="${NITRUM_FN_S3_ENDPOINT:-http://127.0.0.1:4566}"
+DDB_URL="${NITRUM_FN_DDB_ENDPOINT:-http://127.0.0.1:8000}"
+BUCKET="${NITRUM_FN_E2E_BUCKET:-nitrum-fn-e2e-$$}"
+TABLE="${NITRUM_FN_E2E_TABLE:-nitrum-fn-e2e-$$}"
 EXAMPLE="$ROOT/examples/hello-world"
 TARGET="wasm32-unknown-unknown"
 WASM_SRC="$EXAMPLE/target/$TARGET/release/hello_world.wasm"
@@ -21,27 +24,59 @@ cleanup() {
     kill "${HOST_PID}" 2>/dev/null || true
     wait "${HOST_PID}" 2>/dev/null || true
   fi
+  if [[ "$COMPOSE_UP" -eq 1 ]]; then
+    docker compose down >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
 pass() { printf 'ok  - %s\n' "$*"; }
 fail() { printf 'FAIL - %s\n' "$*" >&2; exit 1; }
 
+wait_tcp() {
+  local host="$1" port="$2" label="$3"
+  local ready=0
+  for _ in $(seq 1 60); do
+    if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 0.5
+  done
+  [[ "$ready" -eq 1 ]] || fail "$label not reachable on ${host}:${port}"
+}
+
 echo "==> prepare data dir"
 rm -rf "$DATA_DIR"
-mkdir -p "$ARTIFACT_DIR"
+mkdir -p "$DATA_DIR"
 
-echo "==> start host on :${PORT}"
+echo "==> start Floci (S3) and DynamoDB Local"
+docker compose up -d
+COMPOSE_UP=1
+wait_tcp 127.0.0.1 4566 "Floci"
+wait_tcp 127.0.0.1 8000 "DynamoDB Local"
+pass "emulators up"
+
+echo "==> start host on :${PORT} (S3 artifacts, DynamoDB catalog)"
 NITRUM_FN_PORT="$PORT" \
-NITRUM_FN_ARTIFACT_DIR="$ARTIFACT_DIR" \
-NITRUM_FN_CATALOG_PATH="$CATALOG_PATH" \
+NITRUM_FN_STORE=aws \
+NITRUM_FN_S3_BUCKET="$BUCKET" \
+NITRUM_FN_S3_ENDPOINT="$FLOCI_URL" \
+NITRUM_FN_S3_CREATE_BUCKET=true \
+NITRUM_FN_DDB_TABLE="$TABLE" \
+NITRUM_FN_DDB_ENDPOINT="$DDB_URL" \
+NITRUM_FN_DDB_CREATE_TABLE=true \
 NITRUM_FN_SEED_DIR="$DATA_DIR/seed-empty" \
+AWS_REGION=us-east-1 \
+AWS_DEFAULT_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=test \
+AWS_SECRET_ACCESS_KEY=test \
   cargo run -p host >"$HOST_LOG" 2>&1 &
 HOST_PID=$!
 
 echo "==> wait for /healthz"
 ready=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
   if curl -sf "${URL}/healthz" >/dev/null 2>&1; then
     ready=1
     break
@@ -92,4 +127,4 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
 pass "missing function 404"
 
 echo
-echo "e2e passed"
+echo "e2e passed (S3 via Floci, DynamoDB Local, bucket=$BUCKET, table=$TABLE)"

@@ -8,4 +8,9 @@ license.workspace = true
 application = { workspace = true }
 domain = { workspace = true }
 async-trait = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+aws-config = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

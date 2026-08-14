@@ -65,6 +65,34 @@ nitrum-fn/
 
 Trust rule: only the invoke path (`host` → `InvokeFunction` → `executor`) sees plaintext bodies. Publish / catalog / API are metadata and code artifacts only. `runtime` is linked into guest `.wasm`.
 
+## Local development (S3 + DynamoDB)
+
+Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3 (`artifacts/{hash}.wasm|.cwasm`). For local testing, run [Floci](https://floci.io) as an S3 emulator and DynamoDB Local; the host stays on the host machine (`cargo run`).
+
+```bash
+# 1. Start Floci (:4566) and DynamoDB Local (:8000)
+docker compose up -d
+
+# 2. Run the host against the emulators
+NITRUM_FN_STORE=aws \
+NITRUM_FN_S3_BUCKET=nitrum-fn \
+NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
+NITRUM_FN_S3_CREATE_BUCKET=true \
+NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
+NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
+NITRUM_FN_DDB_CREATE_TABLE=true \
+AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=test \
+AWS_SECRET_ACCESS_KEY=test \
+  cargo run -p host
+
+# 3. Publish + invoke
+cargo run -p cli -- publish ./examples/hello-world/.../hello_world.wasm --name hello-world
+curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: application/json' -d '{}'
+```
+
+`NITRUM_FN_STORE=fs` (default) keeps the previous local filesystem catalog/artifacts under `.data/`. End-to-end smoke: `bash tests/e2e/invoke.sh` (starts Floci + DynamoDB Local, then the host).
+
 ## Stages
 
 Each step is additive. Do not add a coordinator or gateway that terminates caller TLS and re-encrypts into the enclave.

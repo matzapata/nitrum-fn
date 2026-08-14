@@ -44,8 +44,8 @@ fn handle(input: &[u8]) -> Result<Response, Error> {
 }
 
 fn error_response(err: Error) -> Response {
-    let msg = serde_json::to_string(&err.to_string())
-        .unwrap_or_else(|_| "\"internal error\"".into());
+    let msg =
+        serde_json::to_string(&err.to_string()).unwrap_or_else(|_| "\"internal error\"".into());
     Response::builder()
         .status(500)
         .header("content-type", "application/json")
