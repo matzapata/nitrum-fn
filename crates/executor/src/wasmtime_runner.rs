@@ -41,16 +41,6 @@ impl WasmtimeRunner {
         let instance = Instance::new(&mut store, module, &[])
             .map_err(|e| AppError::Invoke(e.to_string()))?;
 
-        // Optional start export — runs `fn main()` / `runtime::run(...)`.
-        if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "nitrum_start") {
-            start
-                .call(&mut store, ())
-                .map_err(|e| AppError::Invoke(format!("nitrum_start failed: {e}")))?;
-        } else if let Ok(main) = instance.get_typed_func::<(), ()>(&mut store, "main") {
-            main.call(&mut store, ())
-                .map_err(|e| AppError::Invoke(format!("main failed: {e}")))?;
-        }
-
         let memory = instance
             .get_memory(&mut store, "memory")
             .ok_or_else(|| AppError::Invoke("module missing export `memory`".into()))?;

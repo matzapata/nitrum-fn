@@ -9,6 +9,9 @@
 //!     Ok(json!({ "message": "Hello, world!" }))
 //! }
 //! ```
+//!
+//! Guest ABI (wasm32): export `memory` + `invoke(ptr, len) -> len`. The first `invoke`
+//! registers the handler; there is no separate start export.
 
 mod error;
 mod http;
@@ -28,4 +31,4 @@ pub use wire::{decode_request, decode_response, encode_request, encode_response}
 
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
-pub use abi::invoke;
+pub use abi::__invoke;

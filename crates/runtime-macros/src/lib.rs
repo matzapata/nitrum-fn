@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemFn};
 
-/// Marks the function entrypoint. Expands to `run(service_fn(...))` plus wasm exports.
+/// Marks the function entrypoint. Expands to a wasm `invoke` that lazy-registers the handler.
 ///
 /// ```ignore
 /// #[runtime::main]
@@ -27,17 +27,14 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote! {
         #input
 
-        fn main() {
-            ::runtime::run(::runtime::service_fn(#name));
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        pub use ::runtime::invoke;
-
         #[cfg(target_arch = "wasm32")]
         #[no_mangle]
-        pub extern "C" fn nitrum_start() {
-            main();
+        pub extern "C" fn invoke(ptr: i32, len: i32) -> i32 {
+            static INIT: ::std::sync::Once = ::std::sync::Once::new();
+            INIT.call_once(|| {
+                ::runtime::run(::runtime::service_fn(#name));
+            });
+            ::runtime::__invoke(ptr, len)
         }
     })
 }

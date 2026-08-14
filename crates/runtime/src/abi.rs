@@ -1,12 +1,12 @@
-//! Host ↔ guest byte ABI. Function authors use [`crate::run`], not this module.
+//! Host ↔ guest byte ABI. Function authors use [`crate::main`]; the macro calls [`__invoke`].
 
 use crate::register::call_handler;
 use crate::wire::{decode_request, encode_response};
 use crate::{Error, Response};
 
-/// Exported entrypoint the host calls for each request.
-#[no_mangle]
-pub extern "C" fn invoke(ptr: i32, len: i32) -> i32 {
+/// Dispatch one wire request → response. Called from the macro-generated `invoke` export.
+#[doc(hidden)]
+pub fn __invoke(ptr: i32, len: i32) -> i32 {
     if ptr < 0 || len < 0 {
         return -1;
     }

@@ -2,8 +2,8 @@
 //!
 //! Module ABI (v0):
 //! - export `memory`
-//! - optional export `main()` — called once per instance to run `runtime::run(...)`
 //! - export `invoke(ptr, len) -> len` — wire Request JSON in, wire Response JSON out
+//!   (handler is registered lazily on first `invoke`)
 
 mod module_cache;
 mod wasmtime_runner;

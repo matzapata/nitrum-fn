@@ -8,7 +8,7 @@ type BoxedHandler = Box<dyn Fn(Request) -> Result<Response, Error> + Send + Sync
 
 static HANDLER: RwLock<Option<BoxedHandler>> = RwLock::new(None);
 
-/// Register `service` as this module's entrypoint (call from `main`).
+/// Register `service` as this module's entrypoint (called once on first `invoke`).
 pub fn run<F, R>(service: ServiceFn<F>)
 where
     F: Fn(Request) -> Result<R, Error> + Send + Sync + 'static,
@@ -23,7 +23,7 @@ pub(crate) fn call_handler(req: Request) -> Result<Response, Error> {
     let slot = HANDLER.read().unwrap_or_else(|e| e.into_inner());
     let Some(handler) = slot.as_ref() else {
         return Err(Error::from_message(
-            "runtime not initialized — call run(service_fn(handler)) from main",
+            "runtime not initialized — #[runtime::main] registers the handler on first invoke",
         ));
     };
     handler(req)
