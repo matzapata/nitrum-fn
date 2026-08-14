@@ -8,4 +8,5 @@ license.workspace = true
 application = { workspace = true }
 domain = { workspace = true }
 async-trait = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }

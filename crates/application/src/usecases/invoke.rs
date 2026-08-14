@@ -28,20 +28,28 @@ impl InvokeFunction {
     #[instrument(skip(self, req), fields(function = %req.function, version = %req.version.as_str()))]
     pub async fn execute(&self, req: InvokeRequest) -> Result<InvokeResponse, AppError> {
         let version = self.catalog.resolve(&req.function, &req.version).await?;
-        let wasm = self.artifacts.get(&version.content_hash).await?;
 
-        let actual = domain::ContentHash::from_bytes(&wasm);
-        if actual != version.content_hash {
-            return Err(AppError::HashMismatch {
-                expected: version.content_hash.to_hex(),
-                actual: actual.to_hex(),
-            });
-        }
-
-        let outcome = self
-            .runner
-            .run(&version.content_hash, &wasm, &req.payload)
-            .await?;
+        let outcome = match self.artifacts.get_compiled(&version.content_hash).await {
+            Ok(compiled) => {
+                self.runner
+                    .run_precompiled(&version.content_hash, &compiled, &req.payload)
+                    .await?
+            }
+            Err(AppError::ArtifactMissing(_)) => {
+                let wasm = self.artifacts.get(&version.content_hash).await?;
+                let actual = domain::ContentHash::from_bytes(&wasm);
+                if actual != version.content_hash {
+                    return Err(AppError::HashMismatch {
+                        expected: version.content_hash.to_hex(),
+                        actual: actual.to_hex(),
+                    });
+                }
+                self.runner
+                    .run(&version.content_hash, &wasm, &req.payload)
+                    .await?
+            }
+            Err(err) => return Err(err),
+        };
 
         Ok(InvokeResponse {
             output: outcome.output,

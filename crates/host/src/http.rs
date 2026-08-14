@@ -26,7 +26,10 @@ async fn invoke(
     body: Bytes,
 ) -> Result<impl IntoResponse, HttpError> {
     let function = FunctionId::new(&name).map_err(application::AppError::from)?;
-    let version = match headers.get("x-nitrum-fn-version").and_then(|v| v.to_str().ok()) {
+    let version = match headers
+        .get("x-nitrum-fn-version")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(raw) => VersionLabel::new(raw).map_err(application::AppError::from)?,
         None => VersionLabel::latest(),
     };
@@ -41,9 +44,8 @@ async fn invoke(
         .collect();
 
     let fn_req = FnRequest::new("POST", path, fn_headers, body.to_vec());
-    let payload = encode_request(&fn_req).map_err(|e| {
-        application::AppError::Invoke(format!("encode request: {e}"))
-    })?;
+    let payload = encode_request(&fn_req)
+        .map_err(|e| application::AppError::Invoke(format!("encode request: {e}")))?;
 
     let response = state
         .invoke
@@ -54,9 +56,8 @@ async fn invoke(
         })
         .await?;
 
-    let fn_res = decode_response(&response.output).map_err(|e| {
-        application::AppError::Invoke(format!("decode response: {e}"))
-    })?;
+    let fn_res = decode_response(&response.output)
+        .map_err(|e| application::AppError::Invoke(format!("decode response: {e}")))?;
 
     let status = StatusCode::from_u16(fn_res.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 

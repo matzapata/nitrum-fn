@@ -8,10 +8,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use application::InvokeFunction;
+use api::ApiState;
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
+use application::{InvokeFunction, PublishFunction};
 use artifacts::FilesystemArtifactStore;
-use catalog::InMemoryCatalog;
-use domain::{FunctionId, VersionLabel};
+use catalog::FilesystemCatalog;
+use domain::{FunctionId, PublishRequest};
 use executor::WasmtimeRunner;
 use tracing::{info, warn};
 
@@ -32,11 +34,24 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("create artifact dir {}", config.artifact_dir.display()))?;
 
-    let catalog = Arc::new(InMemoryCatalog::new());
-    let artifacts = Arc::new(FilesystemArtifactStore::new(config.artifact_dir.clone()));
-    let runner = Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
+    let catalog: Arc<dyn FunctionCatalog> = Arc::new(
+        FilesystemCatalog::open(&config.catalog_path)
+            .await
+            .with_context(|| format!("open catalog {}", config.catalog_path.display()))?,
+    );
+    let artifacts: Arc<dyn ArtifactStore> =
+        Arc::new(FilesystemArtifactStore::new(config.artifact_dir.clone()));
+    let runner: Arc<dyn FunctionRunner> =
+        Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
-    seed_dir(&catalog, &artifacts, &config.seed_dir).await?;
+    preload_compiled(&catalog, &artifacts, &runner).await?;
+
+    let publish = Arc::new(PublishFunction::new(
+        catalog.clone(),
+        artifacts.clone(),
+        runner.clone(),
+    ));
+    seed_dir(&publish, &config.seed_dir).await?;
 
     let invoke = Arc::new(InvokeFunction::new(
         catalog.clone(),
@@ -44,13 +59,13 @@ async fn main() -> Result<()> {
         runner,
     ));
 
-    let state = AppState { invoke };
-    let app = http::router(state);
+    let app = http::router(AppState { invoke }).merge(api::router(ApiState { publish, catalog }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!(
         %addr,
         artifact_dir = %config.artifact_dir.display(),
+        catalog_path = %config.catalog_path.display(),
         seed_dir = %config.seed_dir.display(),
         "nitrum-fn host listening"
     );
@@ -67,15 +82,53 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn seed_dir(
-    catalog: &InMemoryCatalog,
-    artifacts: &FilesystemArtifactStore,
-    seed_dir: &Path,
+async fn preload_compiled(
+    catalog: &Arc<dyn FunctionCatalog>,
+    artifacts: &Arc<dyn ArtifactStore>,
+    runner: &Arc<dyn FunctionRunner>,
 ) -> Result<()> {
+    let versions = catalog.list().await.context("list catalog")?;
+    for version in versions {
+        match artifacts.get_compiled(&version.content_hash).await {
+            Ok(compiled) => match runner
+                .load_precompiled(&version.content_hash, &compiled)
+                .await
+            {
+                Ok(()) => info!(
+                    name = %version.id,
+                    hash = %version.content_hash,
+                    "preloaded compiled module"
+                ),
+                Err(err) => warn!(
+                    name = %version.id,
+                    hash = %version.content_hash,
+                    error = %err,
+                    "failed to preload compiled module"
+                ),
+            },
+            Err(application::AppError::ArtifactMissing(_)) => {
+                info!(
+                    name = %version.id,
+                    hash = %version.content_hash,
+                    "catalog entry has no compiled artifact yet"
+                );
+            }
+            Err(err) => warn!(
+                name = %version.id,
+                hash = %version.content_hash,
+                error = %err,
+                "failed to read compiled artifact"
+            ),
+        }
+    }
+    Ok(())
+}
+
+async fn seed_dir(publish: &PublishFunction, seed_dir: &Path) -> Result<()> {
     if !seed_dir.exists() {
         info!(
             seed_dir = %seed_dir.display(),
-            "no seed dir yet — run examples/hello-world/deploy-local.sh"
+            "no seed dir — publish with `nitrum-fn publish`"
         );
         return Ok(());
     }
@@ -98,26 +151,26 @@ async fn seed_dir(
             .await
             .with_context(|| format!("read {}", path.display()))?;
 
-        match register(catalog, artifacts, name, &wasm).await {
-            Ok(()) => {}
+        let function = match FunctionId::new(name) {
+            Ok(id) => id,
+            Err(err) => {
+                warn!(%name, error = %err, "skipping seed wasm");
+                continue;
+            }
+        };
+
+        match publish.execute(PublishRequest { function, wasm }).await {
+            Ok(res) => info!(
+                name = %res.function,
+                hash = %res.content_hash,
+                wasm_bytes = res.wasm_bytes,
+                compiled_bytes = res.compiled_bytes,
+                "seeded function @latest"
+            ),
             Err(err) => warn!(%name, error = %err, "skipping seed wasm"),
         }
     }
 
-    Ok(())
-}
-
-async fn register(
-    catalog: &InMemoryCatalog,
-    artifacts: &FilesystemArtifactStore,
-    name: &str,
-    wasm: &[u8],
-) -> Result<()> {
-    let hash = artifacts.put(wasm).await.context("store wasm")?;
-    let id = FunctionId::new(name).context("function id")?;
-    let label = VersionLabel::latest();
-    catalog.upsert(&id, &label, hash.clone());
-    info!(%name, %hash, bytes = wasm.len(), "seeded function @latest");
     Ok(())
 }
 

@@ -15,6 +15,12 @@ pub enum AppError {
     #[error("artifact hash mismatch: expected {expected}, got {actual}")]
     HashMismatch { expected: String, actual: String },
 
+    #[error("compile failed: {0}")]
+    Compile(String),
+
+    #[error("storage: {0}")]
+    Storage(String),
+
     #[error("invoke failed: {0}")]
     Invoke(String),
 }

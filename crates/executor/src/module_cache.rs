@@ -30,6 +30,11 @@ impl ModuleCache {
             .unwrap_or_else(|e| e.into_inner())
             .insert(hash, module);
     }
+
+    /// Drop all cached modules (benches / tests simulating a cold process).
+    pub fn clear(&self) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
 }
 
 impl Default for ModuleCache {

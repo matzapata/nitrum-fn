@@ -11,6 +11,25 @@ pub struct RunOutcome {
 
 #[async_trait]
 pub trait FunctionRunner: Send + Sync {
-    /// Compile (or reuse cached Module) and run one invoke.
-    async fn run(&self, hash: &ContentHash, wasm: &[u8], input: &[u8]) -> Result<RunOutcome, AppError>;
+    /// Validate + compile wasm, cache the Module, return serialized AOT bytes.
+    async fn compile(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Vec<u8>, AppError>;
+
+    /// Deserialize a previously serialized module into the in-process cache.
+    async fn load_precompiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError>;
+
+    /// Run from a serialized module (cache hit or deserialize).
+    async fn run_precompiled(
+        &self,
+        hash: &ContentHash,
+        compiled: &[u8],
+        input: &[u8],
+    ) -> Result<RunOutcome, AppError>;
+
+    /// Compile (or reuse cached Module) from raw wasm and run one invoke.
+    async fn run(
+        &self,
+        hash: &ContentHash,
+        wasm: &[u8],
+        input: &[u8],
+    ) -> Result<RunOutcome, AppError>;
 }

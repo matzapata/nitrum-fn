@@ -3,7 +3,9 @@
 mod error;
 mod function;
 mod invoke;
+mod publish;
 
 pub use error::DomainError;
 pub use function::{ContentHash, FunctionId, FunctionVersion, VersionLabel};
 pub use invoke::{InvokeRequest, InvokeResponse};
+pub use publish::{PublishRequest, PublishResponse};

@@ -16,17 +16,23 @@ impl InMemoryCatalog {
     pub fn new() -> Self {
         Self::default()
     }
-
-    pub fn upsert(&self, id: &FunctionId, label: &VersionLabel, hash: ContentHash) {
-        self.entries
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((id.as_str().to_string(), label.as_str().to_string()), hash);
-    }
 }
 
 #[async_trait]
 impl FunctionCatalog for InMemoryCatalog {
+    async fn upsert(
+        &self,
+        id: &FunctionId,
+        label: &VersionLabel,
+        hash: ContentHash,
+    ) -> Result<(), AppError> {
+        self.entries
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((id.as_str().to_string(), label.as_str().to_string()), hash);
+        Ok(())
+    }
+
     async fn resolve(
         &self,
         id: &FunctionId,
@@ -46,5 +52,20 @@ impl FunctionCatalog for InMemoryCatalog {
             label: label.clone(),
             content_hash: hash,
         })
+    }
+
+    async fn list(&self) -> Result<Vec<FunctionVersion>, AppError> {
+        let entries = self.entries.read().unwrap_or_else(|e| e.into_inner());
+        let mut out = Vec::with_capacity(entries.len());
+        for ((id, label), hash) in entries.iter() {
+            let id = FunctionId::new(id.clone()).map_err(AppError::from)?;
+            let label = VersionLabel::new(label.clone()).map_err(AppError::from)?;
+            out.push(FunctionVersion {
+                id,
+                label,
+                content_hash: hash.clone(),
+            });
+        }
+        Ok(out)
     }
 }

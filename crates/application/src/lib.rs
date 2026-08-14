@@ -6,3 +6,4 @@ pub mod usecases;
 
 pub use error::AppError;
 pub use usecases::invoke::InvokeFunction;
+pub use usecases::publish::PublishFunction;

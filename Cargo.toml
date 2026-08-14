@@ -16,15 +16,23 @@ catalog = { path = "crates/catalog" }
 artifacts = { path = "crates/artifacts" }
 runtime = { path = "crates/runtime" }
 runtime-macros = { path = "crates/runtime-macros" }
+api = { path = "crates/api" }
+cli = { path = "crates/cli" }
 
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
+criterion = "0.5"
+tempfile = "3"
 base64 = "0.22"
 bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 proc-macro2 = "1"
 quote = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# unicode-rs backend; 1.2.x pulls ICU crates that need rustc 1.88 (MSRV is 1.85).
+idna_adapter = "=1.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 application = { workspace = true }
+api = { workspace = true }
 artifacts = { workspace = true }
 catalog = { workspace = true }
 domain = { workspace = true }
