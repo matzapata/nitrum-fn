@@ -72,17 +72,16 @@ meta="$(curl -sf "${URL}/functions/hello-world")" \
 echo "$meta" | grep -q '"name":"hello-world"' || fail "metadata name: $meta"
 pass "function metadata"
 
-echo "==> invoke after publish (compiled at deploy → warm)"
-warm_headers="$(mktemp)"
-warm_body="$(curl -sS -D "$warm_headers" -X POST \
+echo "==> invoke after publish"
+headers="$(mktemp)"
+body="$(curl -sS -D "$headers" -X POST \
   "${URL}/invoke/hello-world" \
   -H 'content-type: application/json' \
   -d '{}')"
 
-grep -qi '^HTTP/.* 200' "$warm_headers" || fail "status not 200 ($(head -1 "$warm_headers"))"
-[[ "$warm_body" == '{"message":"Hello, world!"}' ]] || fail "body: $warm_body"
-grep -qi '^x-nitrum-fn-warm: *1' "$warm_headers" || fail "expected x-nitrum-fn-warm: 1 after publish"
-pass "warm invoke after publish"
+grep -qi '^HTTP/.* 200' "$headers" || fail "status not 200 ($(head -1 "$headers"))"
+[[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
+pass "invoke after publish"
 
 echo "==> unknown function → 404"
 code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \

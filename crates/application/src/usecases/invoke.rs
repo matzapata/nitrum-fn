@@ -53,7 +53,6 @@ impl InvokeFunction {
 
         Ok(InvokeResponse {
             output: outcome.output,
-            warm_module: outcome.warm_module,
         })
     }
 }

@@ -6,14 +6,12 @@
 //!
 //! | Group | Maps to |
 //! |---|---|
-//! | `publish` | `PUT /functions/{name}` body of work (compile + store + catalog) |
-//! | `cold_invoke/wasm_fallback` | First invoke with `.wasm` only (no `.cwasm`) |
-//! | `cold_invoke/precompiled` | First invoke with `.cwasm` on disk, empty Module cache |
-//! | `warm_invoke` | Steady-state after publish / preload (cache hit) |
-//! | `restart_preload` | Host boot: deserialize `.cwasm` into cache |
+//! | `publish` | `PUT /functions/{name}` (compile + store + catalog) |
+//! | `invoke/wasm_fallback` | Invoke with `.wasm` only (Cranelift each call) |
+//! | `invoke/precompiled` | Invoke with `.cwasm` on disk (deserialize each call) |
 //!
-//! Not included: axum, TLS, enclave boot, S3. Those dominate later; this isolates
-//! the wasm load/invoke delta that compile-on-deploy is meant to buy.
+//! No in-process Module cache (deferred — see ARCHITECTURE.md). Each invoke
+//! reloads from artifacts; the precompile win is deserialize vs compile.
 //!
 //! ```text
 //! cargo bench -p executor --bench precompile
@@ -88,7 +86,6 @@ struct BenchEnv {
     _dir: TempDir,
     rt: Runtime,
     artifacts: Arc<FilesystemArtifactStore>,
-    runner: Arc<WasmtimeRunner>,
     publish: Arc<PublishFunction>,
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
@@ -112,13 +109,12 @@ impl BenchEnv {
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
             artifacts.clone() as Arc<dyn ArtifactStore>,
-            runner.clone() as Arc<dyn FunctionRunner>,
+            runner as Arc<dyn FunctionRunner>,
         ));
         let wasm = load_hello_world();
         let function = FunctionId::new("hello-world").expect("id");
         let payload = wire_payload();
 
-        // Seed catalog + both artifact forms so cold/warm paths share one setup.
         let published = rt
             .block_on(publish.execute(PublishRequest {
                 function: function.clone(),
@@ -130,7 +126,6 @@ impl BenchEnv {
             _dir: dir,
             rt,
             artifacts,
-            runner,
             publish,
             invoke,
             wasm,
@@ -152,13 +147,11 @@ impl BenchEnv {
 fn host_path_benches(c: &mut Criterion) {
     let env = BenchEnv::new();
 
-    // --- publish: what deploy waits on ---
     {
         let mut g = c.benchmark_group("publish");
         g.sample_size(20);
         g.bench_function("hello_world_compile_and_store", |b| {
             b.iter(|| {
-                env.runner.clear_cache();
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
@@ -169,77 +162,28 @@ fn host_path_benches(c: &mut Criterion) {
         g.finish();
     }
 
-    // --- cold invoke: empty Module cache, read artifacts from disk ---
     {
-        let mut g = c.benchmark_group("cold_invoke");
+        let mut g = c.benchmark_group("invoke");
         g.sample_size(20);
 
-        // Before precompile: only .wasm on disk (remove .cwasm for this arm).
         g.bench_function("wasm_fallback_hello_world", |b| {
             b.iter(|| {
-                env.runner.clear_cache();
                 let _hidden = HiddenCwasm::hide(env.artifacts.compiled_path_for(&env.hash));
                 let res = env
                     .rt
                     .block_on(env.invoke.execute(env.invoke_req()))
                     .expect("invoke wasm fallback");
-                assert!(!res.warm_module, "expected cold compile");
                 black_box(res);
             });
         });
 
-        // After precompile: .cwasm present, cache empty (miss preload).
         g.bench_function("precompiled_hello_world", |b| {
             b.iter(|| {
-                env.runner.clear_cache();
                 let res = env
                     .rt
                     .block_on(env.invoke.execute(env.invoke_req()))
                     .expect("invoke precompiled");
-                assert!(!res.warm_module, "expected cold deserialize");
                 black_box(res);
-            });
-        });
-        g.finish();
-    }
-
-    // --- warm: cache already filled (post-publish or post-preload) ---
-    {
-        env.runner.clear_cache();
-        env.rt
-            .block_on(env.invoke.execute(env.invoke_req()))
-            .expect("warm-up invoke");
-
-        let mut g = c.benchmark_group("warm_invoke");
-        g.sample_size(50);
-        g.bench_function("hello_world", |b| {
-            b.iter(|| {
-                let res = env
-                    .rt
-                    .block_on(env.invoke.execute(env.invoke_req()))
-                    .expect("warm invoke");
-                assert!(res.warm_module, "expected warm cache hit");
-                black_box(res);
-            });
-        });
-        g.finish();
-    }
-
-    // --- restart: deserialize .cwasm into cache (host preload_compiled) ---
-    {
-        let mut g = c.benchmark_group("restart_preload");
-        g.sample_size(30);
-        g.bench_function("load_hello_world_cwasm", |b| {
-            b.iter(|| {
-                env.runner.clear_cache();
-                let compiled = env
-                    .rt
-                    .block_on(env.artifacts.get_compiled(&env.hash))
-                    .expect("read cwasm");
-                env.rt
-                    .block_on(env.runner.load_precompiled(&env.hash, &compiled))
-                    .expect("preload");
-                black_box(());
             });
         });
         g.finish();

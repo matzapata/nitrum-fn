@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
@@ -62,10 +62,6 @@ async fn invoke(
     let status = StatusCode::from_u16(fn_res.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
     let mut out_headers = HeaderMap::new();
-    out_headers.insert(
-        header::HeaderName::from_static("x-nitrum-fn-warm"),
-        HeaderValue::from_static(if response.warm_module { "1" } else { "0" }),
-    );
     for (name, value) in fn_res.headers() {
         let Ok(header_name) = HeaderName::try_from(name.as_str()) else {
             continue;

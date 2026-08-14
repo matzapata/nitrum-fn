@@ -6,18 +6,14 @@ use crate::AppError;
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
     pub output: Vec<u8>,
-    pub warm_module: bool,
 }
 
 #[async_trait]
 pub trait FunctionRunner: Send + Sync {
-    /// Validate + compile wasm, cache the Module, return serialized AOT bytes.
+    /// Validate + compile wasm, return serialized AOT bytes (no in-process Module cache).
     async fn compile(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Vec<u8>, AppError>;
 
-    /// Deserialize a previously serialized module into the in-process cache.
-    async fn load_precompiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError>;
-
-    /// Run from a serialized module (cache hit or deserialize).
+    /// Deserialize a serialized module and run one invoke.
     async fn run_precompiled(
         &self,
         hash: &ContentHash,
@@ -25,7 +21,7 @@ pub trait FunctionRunner: Send + Sync {
         input: &[u8],
     ) -> Result<RunOutcome, AppError>;
 
-    /// Compile (or reuse cached Module) from raw wasm and run one invoke.
+    /// Compile from raw wasm and run one invoke.
     async fn run(
         &self,
         hash: &ContentHash,

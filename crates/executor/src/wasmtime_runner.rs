@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use application::error::AppError;
 use application::ports::{FunctionRunner, RunOutcome};
 use async_trait::async_trait;
@@ -7,12 +5,12 @@ use domain::ContentHash;
 use tracing::instrument;
 use wasmtime::{Engine, Instance, Module, Store};
 
-use crate::module_cache::ModuleCache;
-
 /// Runs guest modules under the v0 `invoke(ptr, len) -> len` ABI.
+///
+/// No in-process Module cache: each invoke compiles or deserializes from artifacts.
+/// See `internal/ARCHITECTURE.md` §"Deferred: in-process Module cache".
 pub struct WasmtimeRunner {
     engine: Engine,
-    cache: Arc<ModuleCache>,
 }
 
 impl WasmtimeRunner {
@@ -20,63 +18,25 @@ impl WasmtimeRunner {
         let mut config = wasmtime::Config::new();
         config.async_support(false);
         let engine = Engine::new(&config).map_err(|e| AppError::Compile(e.to_string()))?;
-        Ok(Self {
-            engine,
-            cache: Arc::new(ModuleCache::new()),
-        })
+        Ok(Self { engine })
     }
 
-    /// Empty the in-process Module cache (cold worker / post-restart before preload).
-    pub fn clear_cache(&self) {
-        self.cache.clear();
-    }
-
-    fn compile_or_get(&self, hash: &ContentHash, wasm: &[u8]) -> Result<(Module, bool), AppError> {
-        if let Some(module) = self.cache.get(hash) {
-            return Ok((module, true));
-        }
-        let module =
-            Module::new(&self.engine, wasm).map_err(|e| AppError::Invoke(e.to_string()))?;
-        self.cache.insert(hash.clone(), module.clone());
-        Ok((module, false))
-    }
-
-    fn compile_sync(
-        engine: &Engine,
-        cache: &ModuleCache,
-        hash: &ContentHash,
-        wasm: &[u8],
-    ) -> Result<Vec<u8>, AppError> {
-        let module = if let Some(module) = cache.get(hash) {
-            module
-        } else {
-            Module::new(engine, wasm).map_err(|e| AppError::Compile(e.to_string()))?
-        };
+    fn compile_sync(engine: &Engine, wasm: &[u8]) -> Result<Vec<u8>, AppError> {
+        let module = Module::new(engine, wasm).map_err(|e| AppError::Compile(e.to_string()))?;
         assert_abi(engine, &module)?;
-        cache.insert(hash.clone(), module.clone());
         module
             .serialize()
             .map_err(|e| AppError::Compile(e.to_string()))
     }
 
-    fn deserialize_or_get(
-        engine: &Engine,
-        cache: &ModuleCache,
-        hash: &ContentHash,
-        compiled: &[u8],
-    ) -> Result<(Module, bool), AppError> {
-        if let Some(module) = cache.get(hash) {
-            return Ok((module, true));
-        }
+    fn deserialize(engine: &Engine, compiled: &[u8]) -> Result<Module, AppError> {
         // SAFETY: `compiled` was produced by `Module::serialize` after a validating
         // `Module::new` in this host (same Engine config). Never deserialize
         // client-supplied AOT bytes.
-        let module = unsafe {
+        unsafe {
             Module::deserialize(engine, compiled)
-                .map_err(|e| AppError::Invoke(format!("deserialize compiled module: {e}")))?
-        };
-        cache.insert(hash.clone(), module.clone());
-        Ok((module, false))
+                .map_err(|e| AppError::Invoke(format!("deserialize compiled module: {e}")))
+        }
     }
 
     fn invoke_sync(module: &Module, engine: &Engine, input: &[u8]) -> Result<Vec<u8>, AppError> {
@@ -165,26 +125,12 @@ fn join_err(err: tokio::task::JoinError) -> AppError {
 impl FunctionRunner for WasmtimeRunner {
     #[instrument(skip(self, wasm), fields(hash = %hash, wasm_len = wasm.len()))]
     async fn compile(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Vec<u8>, AppError> {
+        let _ = hash;
         let engine = self.engine.clone();
-        let cache = self.cache.clone();
-        let hash = hash.clone();
         let wasm = wasm.to_vec();
-        tokio::task::spawn_blocking(move || Self::compile_sync(&engine, &cache, &hash, &wasm))
+        tokio::task::spawn_blocking(move || Self::compile_sync(&engine, &wasm))
             .await
             .map_err(join_err)?
-    }
-
-    #[instrument(skip(self, compiled), fields(hash = %hash, compiled_len = compiled.len()))]
-    async fn load_precompiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
-        let engine = self.engine.clone();
-        let cache = self.cache.clone();
-        let hash = hash.clone();
-        let compiled = compiled.to_vec();
-        tokio::task::spawn_blocking(move || {
-            Self::deserialize_or_get(&engine, &cache, &hash, &compiled).map(|_| ())
-        })
-        .await
-        .map_err(join_err)?
     }
 
     #[instrument(skip(self, compiled, input), fields(hash = %hash, input_len = input.len()))]
@@ -194,18 +140,17 @@ impl FunctionRunner for WasmtimeRunner {
         compiled: &[u8],
         input: &[u8],
     ) -> Result<RunOutcome, AppError> {
-        let (module, warm_module) =
-            Self::deserialize_or_get(&self.engine, &self.cache, hash, compiled)?;
+        let _ = hash;
         let engine = self.engine.clone();
+        let compiled = compiled.to_vec();
         let input = input.to_vec();
-        let output =
-            tokio::task::spawn_blocking(move || Self::invoke_sync(&module, &engine, &input))
-                .await
-                .map_err(join_err)??;
-        Ok(RunOutcome {
-            output,
-            warm_module,
+        let output = tokio::task::spawn_blocking(move || {
+            let module = Self::deserialize(&engine, &compiled)?;
+            Self::invoke_sync(&module, &engine, &input)
         })
+        .await
+        .map_err(join_err)??;
+        Ok(RunOutcome { output })
     }
 
     #[instrument(skip(self, wasm, input), fields(hash = %hash, input_len = input.len()))]
@@ -215,20 +160,21 @@ impl FunctionRunner for WasmtimeRunner {
         wasm: &[u8],
         input: &[u8],
     ) -> Result<RunOutcome, AppError> {
-        let (module, warm_module) = self.compile_or_get(hash, wasm)?;
+        let _ = hash;
         let engine = self.engine.clone();
+        let wasm = wasm.to_vec();
         let input = input.to_vec();
 
         // Cranelift compile / instantiate can be CPU-heavy; keep the async runtime free.
-        let output =
-            tokio::task::spawn_blocking(move || Self::invoke_sync(&module, &engine, &input))
-                .await
-                .map_err(join_err)??;
-
-        Ok(RunOutcome {
-            output,
-            warm_module,
+        let output = tokio::task::spawn_blocking(move || {
+            let module =
+                Module::new(&engine, &wasm).map_err(|e| AppError::Invoke(e.to_string()))?;
+            Self::invoke_sync(&module, &engine, &input)
         })
+        .await
+        .map_err(join_err)??;
+
+        Ok(RunOutcome { output })
     }
 }
 
@@ -264,18 +210,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn echoes_payload_and_warms_cache() {
+    async fn echoes_payload() {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = echo_wasm();
         let hash = ContentHash::from_bytes(&wasm);
 
         let first = runner.run(&hash, &wasm, b"hello").await.expect("run");
         assert_eq!(first.output, b"hello");
-        assert!(!first.warm_module);
 
         let second = runner.run(&hash, &wasm, b"world").await.expect("run");
         assert_eq!(second.output, b"world");
-        assert!(second.warm_module);
     }
 
     #[tokio::test]
@@ -287,29 +231,11 @@ mod tests {
         let compiled = runner.compile(&hash, &wasm).await.expect("compile");
         assert!(!compiled.is_empty());
 
-        // Same runner: compile already filled the cache.
-        let warm = runner
+        let out = runner
             .run_precompiled(&hash, &compiled, b"hello")
             .await
             .expect("run");
-        assert_eq!(warm.output, b"hello");
-        assert!(warm.warm_module);
-
-        // Fresh runner: deserialize path, then cache hit.
-        let other = WasmtimeRunner::new().expect("engine");
-        let cold = other
-            .run_precompiled(&hash, &compiled, b"hello")
-            .await
-            .expect("deserialize run");
-        assert_eq!(cold.output, b"hello");
-        assert!(!cold.warm_module);
-
-        let hot = other
-            .run_precompiled(&hash, &compiled, b"world")
-            .await
-            .expect("cached run");
-        assert_eq!(hot.output, b"world");
-        assert!(hot.warm_module);
+        assert_eq!(out.output, b"hello");
     }
 
     #[tokio::test]

@@ -44,8 +44,6 @@ async fn main() -> Result<()> {
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
-    preload_compiled(&catalog, &artifacts, &runner).await?;
-
     let publish = Arc::new(PublishFunction::new(
         catalog.clone(),
         artifacts.clone(),
@@ -79,48 +77,6 @@ async fn main() -> Result<()> {
         .await
         .context("serve")?;
 
-    Ok(())
-}
-
-async fn preload_compiled(
-    catalog: &Arc<dyn FunctionCatalog>,
-    artifacts: &Arc<dyn ArtifactStore>,
-    runner: &Arc<dyn FunctionRunner>,
-) -> Result<()> {
-    let versions = catalog.list().await.context("list catalog")?;
-    for version in versions {
-        match artifacts.get_compiled(&version.content_hash).await {
-            Ok(compiled) => match runner
-                .load_precompiled(&version.content_hash, &compiled)
-                .await
-            {
-                Ok(()) => info!(
-                    name = %version.id,
-                    hash = %version.content_hash,
-                    "preloaded compiled module"
-                ),
-                Err(err) => warn!(
-                    name = %version.id,
-                    hash = %version.content_hash,
-                    error = %err,
-                    "failed to preload compiled module"
-                ),
-            },
-            Err(application::AppError::ArtifactMissing(_)) => {
-                info!(
-                    name = %version.id,
-                    hash = %version.content_hash,
-                    "catalog entry has no compiled artifact yet"
-                );
-            }
-            Err(err) => warn!(
-                name = %version.id,
-                hash = %version.content_hash,
-                error = %err,
-                "failed to read compiled artifact"
-            ),
-        }
-    }
     Ok(())
 }
 
