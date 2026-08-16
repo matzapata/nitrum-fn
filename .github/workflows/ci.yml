@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: Rust Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          cache-on-failure: true
+      - name: Format
+        run: cargo fmt --all -- --check
+
+  lint:
+    name: Rust Lint (Clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          cache-on-failure: true
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Rust Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          cache-on-failure: true
+      - name: Start Floci (S3) and DynamoDB Local
+        run: docker compose up -d
+      - name: Wait for emulators
+        run: |
+          set -euo pipefail
+          wait_tcp() {
+            local host="$1" port="$2" label="$3"
+            for _ in $(seq 1 60); do
+              if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
+                echo "$label ready on ${host}:${port}"
+                return 0
+              fi
+              sleep 0.5
+            done
+            echo "$label not reachable on ${host}:${port}" >&2
+            docker compose logs
+            exit 1
+          }
+          wait_tcp 127.0.0.1 4566 Floci
+          wait_tcp 127.0.0.1 8000 "DynamoDB Local"
+      - name: Test
+        env:
+          NITRUM_FN_S3_ENDPOINT: http://127.0.0.1:4566
+          NITRUM_FN_DDB_ENDPOINT: http://127.0.0.1:8000
+          AWS_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: cargo test --workspace --all-targets
+      - name: Stop emulators
+        if: always()
+        run: docker compose down
+
+  e2e:
+    name: E2E (publish + invoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          cache-on-failure: true
+      - name: Install curl
+        run: sudo apt-get update && sudo apt-get install -y curl
+      - name: E2E
+        run: bash tests/e2e/invoke.sh

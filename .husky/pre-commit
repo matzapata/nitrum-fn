@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+echo "=== Running pre-commit checks ==="
+
+echo "1. Checking Rust formatting..."
+make fmt-check
+
+echo "2. Running Clippy (Rust linter)..."
+make lint
+
+echo "3. Running Rust tests..."
+make test
+
+echo "=== All checks passed successfully! ==="
