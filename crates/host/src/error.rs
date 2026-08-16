@@ -25,7 +25,9 @@ impl IntoResponse for HttpError {
             AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
                 StatusCode::BAD_REQUEST
             }
-            AppError::Invoke(_) | AppError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::Invoke(_) | AppError::Trap(_) | AppError::Storage(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let body = Json(ErrorBody {
             error: self.0.to_string(),

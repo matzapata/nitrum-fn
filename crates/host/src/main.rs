@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod http;
 mod state;
+mod telemetry;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -26,6 +27,7 @@ use tracing::{info, warn};
 
 use crate::config::{HostConfig, StoreBackend};
 use crate::state::AppState;
+use crate::telemetry::Telemetry;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,6 +38,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let telemetry = Telemetry::init().context("init telemetry")?;
     let config = HostConfig::from_env();
 
     let (catalog, artifacts) = match config.store {
@@ -129,6 +132,7 @@ async fn main() -> Result<()> {
         .await
         .context("serve")?;
 
+    telemetry.shutdown();
     Ok(())
 }
 

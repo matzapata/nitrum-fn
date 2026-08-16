@@ -67,7 +67,9 @@ Trust rule: only the invoke path (`host` → `InvokeFunction` → `executor`) se
 
 ## Local development (S3 + DynamoDB)
 
-Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3 (`artifacts/{hash}.wasm|.cwasm`). For local testing, run [Floci](https://floci.io) as an S3 emulator and DynamoDB Local; the host stays on the host machine (`cargo run`).
+Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3 (`artifacts/{hash}.wasm|.cwasm`). For local store testing, run [Floci](https://floci.io) (S3) and DynamoDB Local; the host stays on the host machine (`cargo run`).
+
+**Observability** uses Nitrum’s OTel path — not a collector in this repo. The host exports OTLP (**gRPC** by default). On `nitrum local` / `nitrum cloud deploy`, the data-plane injects `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, and `OTEL_SERVICE_NAME`; ADOT on the parent host ships metrics to CloudWatch (and Grafana locally). Leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset for stdout-only local runs.
 
 ```bash
 # 1. Start Floci (:4566) and DynamoDB Local (:8000)

@@ -75,7 +75,7 @@ impl WasmtimeRunner {
                     i32::try_from(input.len()).unwrap_or(i32::MAX),
                 ),
             )
-            .map_err(|e| AppError::Invoke(e.to_string()))?;
+            .map_err(|e| AppError::Trap(e.to_string()))?;
 
         if out_len < 0 {
             return Err(AppError::Invoke(format!(
@@ -248,5 +248,28 @@ mod tests {
             AppError::Compile(msg) => assert!(msg.contains("invoke"), "{msg}"),
             other => panic!("expected Compile, got {other}"),
         }
+    }
+
+    fn trap_wasm() -> Vec<u8> {
+        wat::parse_str(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+                unreachable
+              )
+            )
+            "#,
+        )
+        .expect("wat")
+    }
+
+    #[tokio::test]
+    async fn invoke_unreachable_is_trap() {
+        let runner = WasmtimeRunner::new().expect("engine");
+        let wasm = trap_wasm();
+        let hash = ContentHash::from_bytes(&wasm);
+        let err = runner.run(&hash, &wasm, b"x").await.expect_err("trap");
+        assert!(matches!(err, AppError::Trap(_)), "{err}");
     }
 }

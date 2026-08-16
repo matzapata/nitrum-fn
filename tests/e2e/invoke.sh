@@ -58,6 +58,7 @@ wait_tcp 127.0.0.1 8000 "DynamoDB Local"
 pass "emulators up"
 
 echo "==> start host on :${PORT} (S3 artifacts, DynamoDB catalog)"
+# OTEL unset: metrics are no-ops until Nitrum injects OTEL_* (gRPC → ADOT).
 NITRUM_FN_PORT="$PORT" \
 NITRUM_FN_STORE=aws \
 NITRUM_FN_S3_BUCKET="$BUCKET" \

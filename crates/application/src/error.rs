@@ -23,4 +23,8 @@ pub enum AppError {
 
     #[error("invoke failed: {0}")]
     Invoke(String),
+
+    /// Guest trapped while executing `invoke` (Wasmtime trap / panic / unreachable).
+    #[error("guest trap: {0}")]
+    Trap(String),
 }
