@@ -1,3 +1,4 @@
+# Fargate management API (`nitrum-fn-api`). Enclave image: Dockerfile.enclave.
 FROM rust:1.95-bookworm AS builder
 
 WORKDIR /app

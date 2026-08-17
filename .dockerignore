@@ -1,6 +1,7 @@
 .git
 .github
 .data
+.nitrum
 target
 infra
 examples

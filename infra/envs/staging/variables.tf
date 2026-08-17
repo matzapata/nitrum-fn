@@ -6,7 +6,7 @@ variable "aws_region" {
 
 variable "project_name" {
   type        = string
-  description = "Project slug (stack naming, Nitrum SSM paths, tags)."
+  description = "Must match nitrum.toml [project].name. SSM, KMS alias, and Nitrum data-plane paths use this slug."
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,127}$", var.project_name))

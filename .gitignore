@@ -1,6 +1,7 @@
 /target
 **/target
 /.data
+/.nitrum
 **/*.rs.bk
 .DS_Store
 .env

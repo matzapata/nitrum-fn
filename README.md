@@ -99,6 +99,8 @@ curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: applicat
 
 Staging Terraform lives in [`infra/`](infra/README.md): shared VPC (`network`), S3/catalog (`store`), management API on Fargate, optional Nitro enclave fleet. You can apply the API without enclaves (`enable_enclave = false`), then turn the fleet on once you have an EIF and PCR0.
 
+The root `Dockerfile` is **`nitrum-fn-api`** (ECR / Fargate). The enclave image is [`Dockerfile.enclave`](Dockerfile.enclave): data-plane + `/app/nitrum-fn-host`. Build and upload steps are in the infra README (`nitrum build` always uses `./Dockerfile`, so this repo does not use that command for the EIF).
+
 ## Stages
 
 Each step is additive. Do not add a coordinator or gateway that terminates caller TLS and re-encrypts into the enclave.

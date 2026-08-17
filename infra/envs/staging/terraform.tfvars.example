@@ -1,5 +1,7 @@
-aws_region   = "us-east-1"
-project_name = "nitrum-fn-staging"
+aws_region = "us-east-1"
+# Must equal [project].name in nitrum.toml (SSM /nitrum/{name}/…). Staging vs prod
+# is the AWS account and DNS (api_hostname), not a different slug.
+project_name = "nitrum-fn"
 retain       = false
 
 # false = network + store + API only (no Nitro hosts). Flip to true after you have an EIF + PCR0.
