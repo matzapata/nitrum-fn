@@ -1,0 +1,11 @@
+.git
+.github
+.data
+target
+infra
+examples
+internal
+tests
+*.md
+.env
+.env.*

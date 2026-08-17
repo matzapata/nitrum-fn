@@ -1,0 +1,26 @@
+aws_region   = "us-east-1"
+project_name = "nitrum-fn-staging"
+retain       = false
+
+# false = network + store + API only (no Nitro hosts). Flip to true after you have an EIF + PCR0.
+enable_enclave = false
+
+hosted_zone_id = "ZXXXXXXXXXXXX"
+api_hostname   = "api.staging.example.com"
+api_image_tag  = "latest"
+
+# Optional invoke DNS (NLB alias). Only created when enable_enclave is true.
+# invoke_hostname = "fn.staging.example.com"
+
+# Required when enable_enclave = true. Bump both on every EIF publish.
+# eif_version_label = "000000000000"
+# eif_image_sha384  = "replace-with-pcr0-sha384-hex"
+
+# Enclave sizing (matches the Nitrum template defaults).
+asg_min_size                     = 1
+asg_max_size                     = 2
+asg_desired_capacity             = 1
+enclave_cpu_count                = 2
+enclave_memory_mib               = 4320
+instance_type                    = "m6i.xlarge"
+rolling_min_instances_in_service = 1

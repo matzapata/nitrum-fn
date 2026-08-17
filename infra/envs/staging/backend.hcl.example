@@ -1,0 +1,5 @@
+bucket         = "your-tfstate-bucket"
+key            = "nitrum-fn/staging/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "your-tfstate-lock"
+encrypt        = true

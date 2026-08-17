@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::put;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use domain::{FunctionId, PublishRequest, VersionLabel};
 use serde::Serialize;
@@ -13,6 +13,7 @@ use crate::state::ApiState;
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
+        .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/functions/{name}", put(publish).get(get_function))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

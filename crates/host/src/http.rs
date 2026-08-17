@@ -4,7 +4,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum::Router;
 use domain::{FunctionId, InvokeRequest, VersionLabel};
 use runtime::{decode_response, encode_request, Request as FnRequest};
@@ -16,7 +16,6 @@ use crate::telemetry::{outcome_for_error, record_invoke};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/invoke/{name}", post(invoke))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
