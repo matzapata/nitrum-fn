@@ -19,8 +19,6 @@ module "api" {
   vpc_id                = module.network.vpc_id
   public_subnet_ids     = module.network.public_subnet_ids
   private_subnet_ids    = module.network.private_subnet_ids
-  hosted_zone_id        = var.hosted_zone_id
-  api_hostname          = var.api_hostname
   artifacts_bucket_name = module.store.artifacts_bucket_name
   artifacts_bucket_arn  = module.store.artifacts_bucket_arn
   catalog_table_name    = module.store.catalog_table_name
@@ -89,7 +87,7 @@ resource "aws_iam_role_policy" "enclave_fn_store" {
 }
 
 resource "aws_route53_record" "invoke" {
-  count   = var.enable_enclave && var.invoke_hostname != "" ? 1 : 0
+  count   = var.enable_enclave && var.hosted_zone_id != "" && var.invoke_hostname != "" ? 1 : 0
   zone_id = var.hosted_zone_id
   name    = var.invoke_hostname
   type    = "A"
@@ -105,5 +103,12 @@ check "enclave_pcr0" {
   assert {
     condition     = !var.enable_enclave || var.eif_image_sha384 != ""
     error_message = "eif_image_sha384 is required when enable_enclave is true (PCR0 from nitro-cli describe-eif)."
+  }
+}
+
+check "invoke_dns" {
+  assert {
+    condition     = var.invoke_hostname == "" || var.hosted_zone_id != ""
+    error_message = "hosted_zone_id is required when invoke_hostname is set."
   }
 }

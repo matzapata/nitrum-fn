@@ -7,7 +7,8 @@ use wasmtime::{Engine, Instance, Module, Store};
 
 /// Runs guest modules under the v0 `invoke(ptr, len) -> len` ABI.
 ///
-/// No in-process Module cache: each invoke compiles or deserializes from artifacts.
+/// No in-process Module cache: each invoke deserializes from artifacts.
+/// Publish uses `compile`; the enclave invoke path is load-only.
 /// See `internal/ARCHITECTURE.md` §"Deferred: in-process Module cache".
 pub struct WasmtimeRunner {
     engine: Engine,

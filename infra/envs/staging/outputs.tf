@@ -4,8 +4,13 @@ output "vpc_id" {
 }
 
 output "api_url" {
-  description = "HTTPS URL of the management API (publish / catalog)"
+  description = "HTTP URL of the management API (ALB DNS; publish / catalog)"
   value       = module.api.api_url
+}
+
+output "alb_dns_name" {
+  description = "API ALB DNS name"
+  value       = module.api.alb_dns_name
 }
 
 output "artifacts_bucket_name" {
@@ -34,8 +39,8 @@ output "nlb_dns_name" {
 }
 
 output "invoke_url" {
-  description = "Invoke HTTPS URL when invoke_hostname is set"
-  value       = var.enable_enclave && var.invoke_hostname != "" ? "https://${var.invoke_hostname}" : null
+  description = "Invoke HTTPS URL (NLB DNS; self-signed enclave cert — use curl -k)"
+  value       = var.enable_enclave ? "https://${module.enclave[0].nlb_dns_name}" : null
 }
 
 output "eif_s3_uri" {

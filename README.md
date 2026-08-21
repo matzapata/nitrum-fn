@@ -2,6 +2,8 @@
 
 Pay-per-invoke WASM functions on [Nitrum](https://github.com/nitrum) enclaves.
 
+Develop, test, and run staging e2e: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
 `nitrum-fn` is the functions product that runs on Nitrum: developers publish `.wasm`, callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave, and the host runs the guest with Wasmtime. Nitrum stays the platform (EIF, TLS/ACME, attestation, ASG/NLB). This repo is the WASM host, catalog, CLI, and later payments.
 
 ## Features
@@ -9,7 +11,7 @@ Pay-per-invoke WASM functions on [Nitrum](https://github.com/nitrum) enclaves.
 - **Shared ingress.** Any healthy worker can serve any function. The NLB is TCP passthrough; after TLS, `POST /invoke/{fn}` selects the function. No subdomains, coordinator, or SNI routing.
 - **TLS-in-enclave only.** The private key and plaintext request bodies never leave the enclave. Intermediaries (DNS, NLB) see ciphertext. Catalog, CLI, and later dashboards see metadata and code artifacts — never invoke payloads.
 - **Fast path inside a long-lived enclave.** Scale by WASM instances, not by booting enclaves. In-memory Wasmtime `Module` and `Instance` caches absorb the cheap work (compile / instantiate). Enclave boot stays the expensive step and is treated as fleet capacity, not per-request.
-- **Content-hash catalog.** Publish pins `sha256(.wasm)`. Invoke resolves a version label to that hash; the enclave verifies before compile.
+- **Content-hash catalog.** Publish pins `sha256(.wasm)` and stores a musl-compatible `.cwasm`. Invoke resolves a version label to that hash; the enclave deserializes the precompiled module (load-only).
 - **Function SDK.** Guest code uses `Request` / `Response` runtime compiled *into* the `.wasm`, not into the host.
 - **CLI-first.** Publish and invoke are machine-native. No signup portal required for v1.
 - **Observability before UI.** Invoke count, latency, traps, cold vs warm, and later 402/settle rates go through Nitrum’s OTel path (CloudWatch / Grafana).
@@ -93,13 +95,13 @@ cargo run -p cli -- publish ./examples/hello-world/.../hello_world.wasm --name h
 curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: application/json' -d '{}'
 ```
 
-`NITRUM_FN_STORE=fs` (default) keeps the previous local filesystem catalog/artifacts under `.data/`. End-to-end smoke: `bash tests/e2e/invoke.sh` (starts Floci + DynamoDB Local, then the host).
+`NITRUM_FN_STORE=fs` (default) keeps the previous local filesystem catalog/artifacts under `.data/`. End-to-end smoke: `bash tests/e2e/invoke.sh` (starts Floci + DynamoDB Local, then the host). Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Cloud deploy
 
-Staging Terraform lives in [`infra/`](infra/README.md): shared VPC (`network`), S3/catalog (`store`), management API on Fargate, optional Nitro enclave fleet. You can apply the API without enclaves (`enable_enclave = false`), then turn the fleet on once you have an EIF and PCR0.
+Staging Terraform lives in [`infra/`](infra/README.md). Apply the API without enclaves first (`enable_enclave = false`), then the fleet once you have an EIF and PCR0. No custom DNS: publish is HTTP to the ALB; invoke is self-signed TLS on the NLB (`curl -k`). Ordered steps and `tests/e2e/cloud.sh`: [CONTRIBUTING.md](CONTRIBUTING.md#staging-e2e-cloud).
 
-The root `Dockerfile` is **`nitrum-fn-api`** (ECR / Fargate). The enclave image is [`Dockerfile.enclave`](Dockerfile.enclave): data-plane + `/app/nitrum-fn-host`. Build and upload steps are in the infra README (`nitrum build` always uses `./Dockerfile`, so this repo does not use that command for the EIF).
+The enclave image is [`Dockerfile`](Dockerfile) (`nitrum build`). The Fargate API is [`Dockerfile.api`](Dockerfile.api). Do not use `nitrum cloud deploy` — Terraform in this repo owns the stack.
 
 ## Stages
 

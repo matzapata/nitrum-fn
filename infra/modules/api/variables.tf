@@ -23,16 +23,6 @@ variable "private_subnet_ids" {
   description = "Private subnet IDs for Fargate tasks."
 }
 
-variable "hosted_zone_id" {
-  type        = string
-  description = "Route53 hosted zone ID for the API hostname and ACM DNS validation."
-}
-
-variable "api_hostname" {
-  type        = string
-  description = "FQDN for the management API (ACM + ALB alias), e.g. api.staging.example.com."
-}
-
 variable "artifacts_bucket_name" {
   type        = string
   description = "S3 bucket for .wasm / .cwasm artifacts."

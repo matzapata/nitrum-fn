@@ -1,11 +1,6 @@
 output "api_url" {
-  description = "HTTPS URL of the management API"
-  value       = "https://${var.api_hostname}"
-}
-
-output "api_hostname" {
-  description = "FQDN of the management API"
-  value       = var.api_hostname
+  description = "HTTP URL of the management API (ALB DNS; no custom hostname)"
+  value       = "http://${aws_lb.api.dns_name}"
 }
 
 output "alb_dns_name" {

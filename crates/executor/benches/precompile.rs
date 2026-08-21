@@ -7,8 +7,8 @@
 //! | Group | Maps to |
 //! |---|---|
 //! | `publish` | `PUT /functions/{name}` (compile + store + catalog) |
-//! | `invoke/wasm_fallback` | Invoke with `.wasm` only (Cranelift each call) |
 //! | `invoke/precompiled` | Invoke with `.cwasm` on disk (deserialize each call) |
+//! | `invoke/cranelift` | `FunctionRunner::run` from raw `.wasm` (not the invoke path) |
 //!
 //! No in-process Module cache (deferred — see ARCHITECTURE.md). Each invoke
 //! reloads from artifacts; the precompile win is deserialize vs compile.
@@ -17,7 +17,6 @@
 //! cargo bench -p executor --bench precompile
 //! ```
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
@@ -55,37 +54,10 @@ fn wire_payload() -> Vec<u8> {
     encode_request(&req).expect("encode wire request")
 }
 
-/// Temporarily rename `{hash}.cwasm` so InvokeFunction takes the wasm fallback path.
-struct HiddenCwasm {
-    original: PathBuf,
-    backup: PathBuf,
-}
-
-impl HiddenCwasm {
-    fn hide(path: PathBuf) -> Self {
-        let backup = path.with_extension("cwasm.bak");
-        if path.exists() {
-            std::fs::rename(&path, &backup).expect("hide cwasm");
-        }
-        Self {
-            original: path,
-            backup,
-        }
-    }
-}
-
-impl Drop for HiddenCwasm {
-    fn drop(&mut self) {
-        if self.backup.exists() {
-            let _ = std::fs::rename(&self.backup, &self.original);
-        }
-    }
-}
-
 struct BenchEnv {
     _dir: TempDir,
     rt: Runtime,
-    artifacts: Arc<FilesystemArtifactStore>,
+    runner: Arc<WasmtimeRunner>,
     publish: Arc<PublishFunction>,
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
@@ -108,8 +80,8 @@ impl BenchEnv {
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
-            artifacts.clone() as Arc<dyn ArtifactStore>,
-            runner as Arc<dyn FunctionRunner>,
+            artifacts as Arc<dyn ArtifactStore>,
+            runner.clone() as Arc<dyn FunctionRunner>,
         ));
         let wasm = load_hello_world();
         let function = FunctionId::new("hello-world").expect("id");
@@ -125,7 +97,7 @@ impl BenchEnv {
         Self {
             _dir: dir,
             rt,
-            artifacts,
+            runner,
             publish,
             invoke,
             wasm,
@@ -166,23 +138,23 @@ fn host_path_benches(c: &mut Criterion) {
         let mut g = c.benchmark_group("invoke");
         g.sample_size(20);
 
-        g.bench_function("wasm_fallback_hello_world", |b| {
-            b.iter(|| {
-                let _hidden = HiddenCwasm::hide(env.artifacts.compiled_path_for(&env.hash));
-                let res = env
-                    .rt
-                    .block_on(env.invoke.execute(env.invoke_req()))
-                    .expect("invoke wasm fallback");
-                black_box(res);
-            });
-        });
-
         g.bench_function("precompiled_hello_world", |b| {
             b.iter(|| {
                 let res = env
                     .rt
                     .block_on(env.invoke.execute(env.invoke_req()))
                     .expect("invoke precompiled");
+                black_box(res);
+            });
+        });
+
+        // Cranelift path for comparison only — InvokeFunction is load-only.
+        g.bench_function("cranelift_hello_world", |b| {
+            b.iter(|| {
+                let res = env
+                    .rt
+                    .block_on(env.runner.run(&env.hash, &env.wasm, &env.payload))
+                    .expect("runner.run");
                 black_box(res);
             });
         });

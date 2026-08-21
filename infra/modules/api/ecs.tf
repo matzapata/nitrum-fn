@@ -11,6 +11,11 @@ resource "aws_ecs_task_definition" "api" {
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
   container_definitions = jsonencode([
     {
       name      = local.container_name
@@ -61,5 +66,5 @@ resource "aws_ecs_service" "api" {
     container_port   = local.container_port
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 }

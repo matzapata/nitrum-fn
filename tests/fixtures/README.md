@@ -18,10 +18,10 @@ cp examples/hello-world/target/wasm32-unknown-unknown/release/hello_world.wasm \
   tests/fixtures/hello_world.wasm
 ```
 
-Host-path Criterion bench (publish / invoke wasm vs `.cwasm`):
+Host-path Criterion bench (publish / invoke precompiled / Cranelift `runner.run`):
 
 ```bash
 cargo bench -p executor --bench precompile
 ```
 
-No in-process Module cache — each invoke reloads from artifacts (see ARCHITECTURE.md §9).
+No in-process Module cache — each invoke reloads `.cwasm` from artifacts (see ARCHITECTURE.md §9).

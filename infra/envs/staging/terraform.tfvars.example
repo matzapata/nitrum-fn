@@ -1,18 +1,17 @@
 aws_region = "us-east-1"
 # Must equal [project].name in nitrum.toml (SSM /nitrum/{name}/…). Staging vs prod
-# is the AWS account and DNS (api_hostname), not a different slug.
+# is the AWS account, not a different slug.
 project_name = "nitrum-fn"
 retain       = false
 
 # false = network + store + API only (no Nitro hosts). Flip to true after you have an EIF + PCR0.
 enable_enclave = false
 
-hosted_zone_id = "ZXXXXXXXXXXXX"
-api_hostname   = "api.staging.example.com"
-api_image_tag  = "latest"
+api_image_tag = "latest"
 
-# Optional invoke DNS (NLB alias). Only created when enable_enclave is true.
-# invoke_hostname = "fn.staging.example.com"
+# Optional later: NLB alias (requires hosted_zone_id). Default invoke URL is the NLB DNS name.
+# hosted_zone_id   = "ZXXXXXXXXXXXX"
+# invoke_hostname  = "fn.staging.example.com"
 
 # Required when enable_enclave = true. Bump both on every EIF publish.
 # eif_version_label = "000000000000"

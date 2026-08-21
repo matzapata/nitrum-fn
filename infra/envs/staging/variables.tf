@@ -46,18 +46,14 @@ variable "eif_image_sha384" {
 
 variable "hosted_zone_id" {
   type        = string
-  description = "Route53 hosted zone ID for the API hostname and ACM validation."
-}
-
-variable "api_hostname" {
-  type        = string
-  description = "FQDN for the management API, e.g. api.staging.example.com."
+  default     = ""
+  description = "Optional Route53 hosted zone. Only needed if invoke_hostname is set. The API uses the ALB DNS name (HTTP)."
 }
 
 variable "invoke_hostname" {
   type        = string
   default     = ""
-  description = "Optional FQDN for invoke (NLB alias), e.g. fn.staging.example.com. Empty skips the record. Only used when enable_enclave is true."
+  description = "Optional FQDN for invoke (NLB alias). Empty skips the record. Requires hosted_zone_id. Default invoke URL is the NLB DNS name."
 }
 
 variable "api_image_tag" {

@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1.7
+#
+# Fargate management API (`nitrum-fn-api`). Enclave image is ./Dockerfile (`nitrum build`).
+# Built for x86_64-unknown-linux-musl so publish-time .cwasm matches the musl enclave host.
+# Fargate is X86_64 — build with `--platform linux/amd64 -f Dockerfile.api` (QEMU on Apple Silicon).
+FROM --platform=linux/amd64 rust:1.95-bookworm AS builder
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-unknown-linux-musl
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+
+RUN --mount=type=cache,id=nitrum-fn-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=nitrum-fn-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=nitrum-fn-api-target,target=/build/target,sharing=locked \
+    cargo build --locked --release --target x86_64-unknown-linux-musl -p api --bin nitrum-fn-api \
+    && mkdir -p /out \
+    && cp /build/target/x86_64-unknown-linux-musl/release/nitrum-fn-api /out/nitrum-fn-api
+
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /out/nitrum-fn-api /usr/local/bin/nitrum-fn-api
+
+USER 65534:65534
+EXPOSE 8080
+ENV NITRUM_FN_PORT=8080
+
+CMD ["nitrum-fn-api"]
