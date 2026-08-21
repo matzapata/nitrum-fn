@@ -31,6 +31,7 @@ resource "aws_ecs_task_definition" "api" {
         { name = "NITRUM_FN_STORE", value = "aws" },
         { name = "NITRUM_FN_S3_BUCKET", value = var.artifacts_bucket_name },
         { name = "NITRUM_FN_DDB_TABLE", value = var.catalog_table_name },
+        { name = "NITRUM_FN_SNS_TOPIC_ARN", value = var.publish_topic_arn },
         { name = "NITRUM_FN_PORT", value = tostring(local.container_port) },
         { name = "AWS_REGION", value = data.aws_region.current.name },
         { name = "OTEL_SERVICE_NAME", value = "nitrum-fn-api" },

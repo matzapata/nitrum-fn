@@ -22,7 +22,7 @@ No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed 
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, workspace tests (with Floci + DynamoDB Local), and `tests/e2e/invoke.sh`. Match that locally:
+CI (`.github/workflows/ci.yml`) runs format, Clippy, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/invoke.sh`. Match that locally:
 
 ```bash
 cargo fmt --all -- --check
@@ -35,22 +35,29 @@ AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
 bash tests/e2e/invoke.sh
 ```
 
-`invoke.sh` is **local only**: merged host (publish + invoke), emulators, not the cloud split.
+`invoke.sh` is **local only**: merged host + publish-worker + emulators, not the cloud split.
 
 ## Local host
+
+Publish is async: the host enqueues to Floci **SQS**; **publish-worker** AOT-compiles. Start emulators (Floci + DynamoDB Local), then worker + host:
 
 ```bash
 docker compose up -d
 
-NITRUM_FN_STORE=aws \
-NITRUM_FN_S3_BUCKET=nitrum-fn \
-NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-NITRUM_FN_S3_CREATE_BUCKET=true \
-NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
-NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
-NITRUM_FN_DDB_CREATE_TABLE=true \
-AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
-  cargo run -p host
+export NITRUM_FN_STORE=aws \
+  NITRUM_FN_S3_BUCKET=nitrum-fn \
+  NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
+  NITRUM_FN_S3_CREATE_BUCKET=true \
+  NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
+  NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
+  NITRUM_FN_DDB_CREATE_TABLE=true \
+  NITRUM_FN_SQS_QUEUE_URL=http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
+  NITRUM_FN_SQS_ENDPOINT=http://127.0.0.1:4566 \
+  NITRUM_FN_SQS_CREATE_QUEUE=true \
+  AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+
+cargo run -p publish-worker &
+cargo run -p host
 ```
 
 In another terminal:
@@ -61,13 +68,13 @@ curl -X POST http://127.0.0.1:8080/invoke/hello-world \
   -H 'content-type: application/json' -d '{}'
 ```
 
-`NITRUM_FN_STORE=fs` (default) uses `.data/` instead of the emulators.
+`NITRUM_FN_STORE=fs` (default) is seed + invoke only — no SQS required. HTTP publish is disabled on the filesystem catalog (it is not shared with `publish-worker`). Use `NITRUM_FN_STORE=aws` as above for CLI publish.
 
 ## Staging e2e (cloud)
 
-Two deployables share one VPC: **API** (Fargate + HTTP ALB, publish/catalog) and **enclave** (NLB TCP passthrough, invoke). Apply the API first; turn the fleet on after you have an EIF and PCR0.
+Two deployables share one VPC by default: **API** (Fargate + HTTP ALB) and **publish-worker** (Fargate, SQS → AOT). The **enclave** (NLB TCP passthrough, invoke) is optional — apply the API/worker first; turn the fleet on after you have an EIF and PCR0.
 
-`nitrum build` always builds `./Dockerfile` as **linux/amd64** (QEMU on Apple Silicon). The API image is `Dockerfile.api` (also musl, so `.cwasm` matches the enclave).
+`nitrum build` always builds `./Dockerfile` as **linux/amd64** (QEMU on Apple Silicon). The API is `Dockerfile.api`; the publish worker is `Dockerfile.publish-worker` (musl, so `.cwasm` matches the enclave).
 
 ### 1. Terraform (API only)
 
@@ -79,18 +86,21 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-### 2. Push `nitrum-fn-api`
+### 2. Push `nitrum-fn-api` and `nitrum-fn-publish-worker`
 
 ```bash
 AWS_REGION=us-east-1
 ECR=$(terraform -chdir=infra/envs/staging output -raw ecr_repository_url)
+WORKER_ECR=$(terraform -chdir=infra/envs/staging output -raw worker_ecr_repository_url)
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "${ECR%%/*}"
 docker build --platform linux/amd64 -f Dockerfile.api -t "$ECR:latest" .
 docker push "$ECR:latest"
+docker build --platform linux/amd64 -f Dockerfile.publish-worker -t "$WORKER_ECR:latest" .
+docker push "$WORKER_ECR:latest"
 ```
 
-Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can publish here; invoke needs the enclave.
+Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can publish here (CLI polls until the worker catalogs the function); invoke needs the enclave.
 
 ### 3. Build and upload the EIF
 
@@ -142,6 +152,7 @@ This job is **not** in GitHub Actions.
 | File | Binary | Where |
 |---|---|---|
 | `Dockerfile` | data-plane + `nitrum-fn-host` | EIF via `nitrum build` |
-| `Dockerfile.api` | `nitrum-fn-api` (musl) | Fargate / ECR |
+| `Dockerfile.api` | `nitrum-fn-api` | Fargate / ECR (store `.wasm`, SNS publish) |
+| `Dockerfile.publish-worker` | `nitrum-fn-publish-worker` (musl) | Fargate / ECR (SQS → AOT `.cwasm`) |
 
-Both images target `x86_64-unknown-linux-musl` so publish-time `.cwasm` matches the enclave. Invoke **only deserializes** `.cwasm` — no Cranelift fallback. After rolling a new API image, **republish** functions so S3 AOT blobs are musl-compatible.
+The **publish-worker** must be musl so `.cwasm` matches the enclave. Invoke **only deserializes** `.cwasm`. After rolling a new worker image, **republish** functions so S3 AOT blobs are rebuilt.

@@ -2,19 +2,20 @@
 
 Contributor workflow (local checks, images, staging e2e): [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-Staging deploys **network + store + API** by default. The Nitro enclave fleet is optional (`enable_enclave`) so you can publish functions before you have an EIF.
+Staging deploys **network + store + API + publish-worker** by default. The Nitro enclave fleet is optional (`enable_enclave`) so you can publish functions before you have an EIF.
 
 ```text
 infra/
   modules/
-    network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs endpoints
-    store/     # EIF bucket, artifacts bucket, catalog table, /env SSM
+    network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs/SQS/SNS endpoints
+    store/     # EIF S3, artifacts S3, catalog DDB, SNS+SQS, /env SSM
     api/       # HTTP ALB, ECR, Fargate (ALB DNS; no custom hostname)
+    worker/    # ECR + Fargate publish-worker (SQS → AOT)
     enclave/   # NLB, ASG, KMS, Nitrum data-plane table (optional)
   envs/staging/
 ```
 
-TLS for **invoke** terminates only in the enclave (NLB TCP passthrough, self-signed until ACME is enabled). **Publish** is HTTP to the API ALB DNS (metadata + `.wasm` only).
+TLS for **invoke** terminates only in the enclave (NLB TCP passthrough, self-signed until ACME is enabled). **Publish** is HTTP to the API ALB DNS (`.wasm` upload + SNS enqueue; AOT is the publish-worker).
 
 `project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**, not a second slug. The `Environment = staging` tag on this env is only for AWS resource tags.
 
@@ -41,7 +42,7 @@ cp backend.hcl.example backend.hcl
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-## 1. Network + store + API (no enclaves)
+## 1. Network + store + API + worker (no enclaves)
 
 ```bash
 cd infra/envs/staging
@@ -50,20 +51,23 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-Outputs you need: `ecr_repository_url`, `api_url`, `eif_bucket_name`, `artifacts_bucket_name`.
+Outputs you need: `ecr_repository_url`, `worker_ecr_repository_url`, `api_url`, `eif_bucket_name`, `artifacts_bucket_name`.
 
-Build and push the management API (Fargate stays unhealthy until this exists). Fargate is **x86_64** — always pass `--platform linux/amd64` (QEMU on Apple Silicon):
+Build and push the management API and publish-worker (Fargate stays unhealthy until images exist). Fargate is **x86_64** — always pass `--platform linux/amd64` (QEMU on Apple Silicon):
 
 ```bash
 # from repo root; region/account from your AWS profile
 AWS_REGION=us-east-1
 ECR=$(terraform -chdir=infra/envs/staging output -raw ecr_repository_url)
+WORKER_ECR=$(terraform -chdir=infra/envs/staging output -raw worker_ecr_repository_url)
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%%/*}"
 docker build --platform linux/amd64 -f Dockerfile.api -t "$ECR:latest" .
 docker push "$ECR:latest"
+docker build --platform linux/amd64 -f Dockerfile.publish-worker -t "$WORKER_ECR:latest" .
+docker push "$WORKER_ECR:latest"
 ```
 
-Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Publish:
+Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Publish (CLI polls until the worker upserts the catalog):
 
 ```bash
 cargo run -p cli -- publish ./path/to/fn.wasm --name hello-world --url "$(terraform -chdir=infra/envs/staging output -raw api_url)"
@@ -98,7 +102,7 @@ eif_image_sha384  = "<PCR0 hex>"
 
 4. `terraform apply` — creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts.
 
-SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_STORE`, `NITRUM_FN_S3_BUCKET`, and `NITRUM_FN_DDB_TABLE` so Nitrum can inject them into the enclave.
+SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_STORE`, `NITRUM_FN_S3_BUCKET`, and `NITRUM_FN_DDB_TABLE` so Nitrum can inject them into the enclave. The host does not need SNS/SQS in the enclave (publish is the Fargate API).
 
 Invoke (`-k` because the enclave cert is self-signed):
 

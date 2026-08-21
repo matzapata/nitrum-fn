@@ -18,7 +18,7 @@ cp examples/hello-world/target/wasm32-unknown-unknown/release/hello_world.wasm \
   tests/fixtures/hello_world.wasm
 ```
 
-Host-path Criterion bench (publish / invoke precompiled / Cranelift `runner.run`):
+Host-path Criterion bench (publish enqueue / AOT compile / invoke precompiled / Cranelift `runner.run`):
 
 ```bash
 cargo bench -p executor --bench precompile

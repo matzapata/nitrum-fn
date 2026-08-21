@@ -43,6 +43,11 @@ variable "catalog_table_arn" {
   description = "ARN of the catalog table."
 }
 
+variable "publish_topic_arn" {
+  type        = string
+  description = "SNS topic ARN for publish-queued events."
+}
+
 variable "image_tag" {
   type        = string
   default     = "latest"
@@ -57,13 +62,13 @@ variable "desired_count" {
 
 variable "cpu" {
   type        = number
-  default     = 1024
-  description = "Fargate task CPU units (compile-on-publish needs headroom)."
+  default     = 512
+  description = "Fargate task CPU units (API stores .wasm and publishes SNS; compile is off-box)."
 }
 
 variable "memory" {
   type        = number
-  default     = 2048
+  default     = 1024
   description = "Fargate task memory in MiB."
 }
 

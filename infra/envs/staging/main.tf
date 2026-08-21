@@ -23,8 +23,26 @@ module "api" {
   artifacts_bucket_arn  = module.store.artifacts_bucket_arn
   catalog_table_name    = module.store.catalog_table_name
   catalog_table_arn     = module.store.catalog_table_arn
+  publish_topic_arn     = module.store.publish_topic_arn
   image_tag             = var.api_image_tag
   desired_count         = var.api_desired_count
+  log_retention_in_days = var.log_retention_in_days
+}
+
+module "worker" {
+  source = "../../modules/worker"
+
+  project_name          = var.project_name
+  vpc_id                = module.network.vpc_id
+  private_subnet_ids    = module.network.private_subnet_ids
+  artifacts_bucket_name = module.store.artifacts_bucket_name
+  artifacts_bucket_arn  = module.store.artifacts_bucket_arn
+  catalog_table_name    = module.store.catalog_table_name
+  catalog_table_arn     = module.store.catalog_table_arn
+  compile_queue_url     = module.store.compile_queue_url
+  compile_queue_arn     = module.store.compile_queue_arn
+  image_tag             = var.worker_image_tag
+  desired_count         = var.worker_desired_count
   log_retention_in_days = var.log_retention_in_days
 }
 

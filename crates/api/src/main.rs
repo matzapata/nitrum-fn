@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use api::ApiState;
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
+use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
 use application::PublishFunction;
 use artifacts::{FilesystemArtifactStore, S3ArtifactStore};
 use aws_config::BehaviorVersion;
@@ -15,8 +15,11 @@ use aws_sdk_dynamodb::types::{
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_sns::Client as SnsClient;
+use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
+use aws_sdk_sqs::Client as SqsClient;
 use catalog::{DynamoDbCatalog, FilesystemCatalog};
-use executor::WasmtimeRunner;
+use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
 use tracing::info;
 
 use crate::config::{ApiConfig, StoreBackend};
@@ -74,10 +77,8 @@ async fn main() -> Result<()> {
         }
     };
 
-    let runner: Arc<dyn FunctionRunner> =
-        Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
-
-    let publish = Arc::new(PublishFunction::new(catalog.clone(), artifacts, runner));
+    let bus = build_publish_bus(&config).await?;
+    let publish = Arc::new(PublishFunction::new(artifacts, bus));
 
     let app = api::router(ApiState { publish, catalog });
 
@@ -96,6 +97,8 @@ async fn main() -> Result<()> {
             s3_endpoint = ?config.s3_endpoint,
             table = ?config.ddb_table,
             ddb_endpoint = ?config.ddb_endpoint,
+            sns_topic_arn = ?config.sns_topic_arn,
+            sqs_queue_url = ?config.sqs_queue_url,
             store = "aws",
             "nitrum-fn api listening"
         ),
@@ -113,6 +116,28 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn build_publish_bus(config: &ApiConfig) -> Result<Arc<dyn PublishBus>> {
+    if let Some(topic_arn) = &config.sns_topic_arn {
+        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let client = SnsClient::new(&sdk);
+        info!(%topic_arn, "publish bus: SNS");
+        return Ok(Arc::new(SnsPublishBus::new(client, topic_arn.clone())));
+    }
+    let queue_url = config
+        .sqs_queue_url
+        .clone()
+        .context("set NITRUM_FN_SNS_TOPIC_ARN or NITRUM_FN_SQS_QUEUE_URL")?;
+    let client = build_sqs_client(config.sqs_endpoint.as_deref()).await?;
+    if config.sqs_create_queue {
+        ensure_queue(&client, &queue_url)
+            .await
+            .context("ensure SQS queue")?;
+        info!(%queue_url, "SQS queue ready");
+    }
+    info!(%queue_url, endpoint = ?config.sqs_endpoint, "publish bus: SQS direct");
+    Ok(Arc::new(SqsPublishBus::new(client, queue_url)))
+}
+
 async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
     let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
     let mut builder = S3ConfigBuilder::from(&sdk);
@@ -120,6 +145,15 @@ async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
+}
+
+async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
+    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let mut builder = SqsConfigBuilder::from(&sdk);
+    if let Some(url) = endpoint {
+        builder = builder.endpoint_url(url);
+    }
+    Ok(SqsClient::from_conf(builder.build()))
 }
 
 async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
@@ -221,6 +255,19 @@ async fn wait_table_active(client: &DdbClient, table: &str) -> Result<()> {
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+    }
     info!("shutdown signal received");
 }

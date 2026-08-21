@@ -17,6 +17,12 @@ pub struct ApiConfig {
     pub ddb_table: Option<String>,
     pub ddb_endpoint: Option<String>,
     pub ddb_create_table: bool,
+    /// Cloud: SNS topic for publish fan-out.
+    pub sns_topic_arn: Option<String>,
+    /// Local (Floci) or direct enqueue when SNS is unset.
+    pub sqs_queue_url: Option<String>,
+    pub sqs_endpoint: Option<String>,
+    pub sqs_create_queue: bool,
 }
 
 impl ApiConfig {
@@ -53,6 +59,16 @@ impl ApiConfig {
             .ok()
             .filter(|s| !s.is_empty());
         let ddb_create_table = env_flag("NITRUM_FN_DDB_CREATE_TABLE");
+        let sns_topic_arn = std::env::var("NITRUM_FN_SNS_TOPIC_ARN")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let sqs_queue_url = std::env::var("NITRUM_FN_SQS_QUEUE_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let sqs_endpoint = std::env::var("NITRUM_FN_SQS_ENDPOINT")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let sqs_create_queue = env_flag("NITRUM_FN_SQS_CREATE_QUEUE");
         Self {
             port,
             store,
@@ -64,6 +80,10 @@ impl ApiConfig {
             ddb_table,
             ddb_endpoint,
             ddb_create_table,
+            sns_topic_arn,
+            sqs_queue_url,
+            sqs_endpoint,
+            sqs_create_queue,
         }
     }
 }

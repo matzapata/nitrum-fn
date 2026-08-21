@@ -68,6 +68,18 @@ variable "api_desired_count" {
   description = "Fargate desired count. Push an image to ECR before the service can start."
 }
 
+variable "worker_image_tag" {
+  type        = string
+  default     = "latest"
+  description = "ECR image tag for nitrum-fn-publish-worker."
+}
+
+variable "worker_desired_count" {
+  type        = number
+  default     = 1
+  description = "Publish worker Fargate desired count."
+}
+
 variable "asg_min_size" {
   type    = number
   default = 1

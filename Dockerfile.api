@@ -1,7 +1,5 @@
-# syntax=docker/dockerfile:1.7
-#
 # Fargate management API (`nitrum-fn-api`). Enclave image is ./Dockerfile (`nitrum build`).
-# Built for x86_64-unknown-linux-musl so publish-time .cwasm matches the musl enclave host.
+# AOT compile lives in Dockerfile.publish-worker (musl). This image only stores .wasm and publishes SNS.
 # Fargate is X86_64 — build with `--platform linux/amd64 -f Dockerfile.api` (QEMU on Apple Silicon).
 FROM --platform=linux/amd64 rust:1.95-bookworm AS builder
 

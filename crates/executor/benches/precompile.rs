@@ -1,17 +1,10 @@
 //! Representative benches for nitrum-fn host paths (minus HTTP).
 //!
-//! Exercises the same stack as production: `FilesystemArtifactStore`,
-//! `InMemoryCatalog`, `WasmtimeRunner`, `PublishFunction` / `InvokeFunction`,
-//! and the hello-world guest with host wire encoding (`runtime::encode_request`).
-//!
 //! | Group | Maps to |
 //! |---|---|
-//! | `publish` | `PUT /functions/{name}` (compile + store + catalog) |
+//! | `publish` | store `.wasm` + enqueue (in-memory bus) |
 //! | `invoke/precompiled` | Invoke with `.cwasm` on disk (deserialize each call) |
-//! | `invoke/cranelift` | `FunctionRunner::run` from raw `.wasm` (not the invoke path) |
-//!
-//! No in-process Module cache (deferred — see ARCHITECTURE.md). Each invoke
-//! reloads from artifacts; the precompile win is deserialize vs compile.
+//! | `invoke/cranelift` | `FunctionRunner::run` from raw `.wasm` |
 //!
 //! ```text
 //! cargo bench -p executor --bench precompile
@@ -19,16 +12,21 @@
 
 use std::sync::Arc;
 
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
-use application::{InvokeFunction, PublishFunction};
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishBus};
+use application::AppError;
+use application::{CompileQueuedFunction, InvokeFunction, PublishFunction};
 use artifacts::FilesystemArtifactStore;
+use async_trait::async_trait;
 use catalog::InMemoryCatalog;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use domain::{ContentHash, FunctionId, InvokeRequest, PublishRequest, VersionLabel};
+use domain::{
+    ContentHash, FunctionId, InvokeRequest, PublishQueuedEvent, PublishRequest, VersionLabel,
+};
 use executor::WasmtimeRunner;
 use runtime::{encode_request, Request as FnRequest};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
@@ -54,10 +52,37 @@ fn wire_payload() -> Vec<u8> {
     encode_request(&req).expect("encode wire request")
 }
 
+/// Records queued events; drain via `take` for the bench compile step.
+struct MemBus {
+    events: Mutex<Vec<PublishQueuedEvent>>,
+}
+
+impl MemBus {
+    fn new() -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn take(&self) -> Vec<PublishQueuedEvent> {
+        std::mem::take(&mut *self.events.lock().await)
+    }
+}
+
+#[async_trait]
+impl PublishBus for MemBus {
+    async fn publish_queued(&self, event: &PublishQueuedEvent) -> Result<(), AppError> {
+        self.events.lock().await.push(event.clone());
+        Ok(())
+    }
+}
+
 struct BenchEnv {
     _dir: TempDir,
     rt: Runtime,
     runner: Arc<WasmtimeRunner>,
+    bus: Arc<MemBus>,
+    compile: Arc<CompileQueuedFunction>,
     publish: Arc<PublishFunction>,
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
@@ -73,10 +98,15 @@ impl BenchEnv {
         let artifacts = Arc::new(FilesystemArtifactStore::new(dir.path().join("artifacts")));
         let catalog = Arc::new(InMemoryCatalog::new());
         let runner = Arc::new(WasmtimeRunner::new().expect("runner"));
-        let publish = Arc::new(PublishFunction::new(
+        let bus = Arc::new(MemBus::new());
+        let compile = Arc::new(CompileQueuedFunction::new(
             catalog.clone() as Arc<dyn FunctionCatalog>,
             artifacts.clone() as Arc<dyn ArtifactStore>,
             runner.clone() as Arc<dyn FunctionRunner>,
+        ));
+        let publish = Arc::new(PublishFunction::new(
+            artifacts.clone() as Arc<dyn ArtifactStore>,
+            bus.clone() as Arc<dyn PublishBus>,
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
@@ -93,11 +123,16 @@ impl BenchEnv {
                 wasm: wasm.clone(),
             }))
             .expect("seed publish");
+        for event in rt.block_on(bus.take()) {
+            rt.block_on(compile.execute(&event)).expect("seed compile");
+        }
 
         Self {
             _dir: dir,
             rt,
             runner,
+            bus,
+            compile,
             publish,
             invoke,
             wasm,
@@ -122,13 +157,32 @@ fn host_path_benches(c: &mut Criterion) {
     {
         let mut g = c.benchmark_group("publish");
         g.sample_size(20);
-        g.bench_function("hello_world_compile_and_store", |b| {
+        g.bench_function("hello_world_store_and_enqueue", |b| {
             b.iter(|| {
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
                 }));
+                let _ = env.rt.block_on(env.bus.take());
                 black_box(res.expect("publish"));
+            });
+        });
+        g.finish();
+    }
+
+    {
+        let mut g = c.benchmark_group("compile");
+        g.sample_size(20);
+        g.bench_function("hello_world_aot", |b| {
+            b.iter(|| {
+                let event = PublishQueuedEvent::new(
+                    env.function.to_string(),
+                    env.hash.to_hex(),
+                    env.wasm.len(),
+                );
+                let res = env.rt.block_on(env.compile.execute(&event));
+                res.expect("compile");
+                black_box(());
             });
         });
         g.finish();
@@ -148,7 +202,6 @@ fn host_path_benches(c: &mut Criterion) {
             });
         });
 
-        // Cranelift path for comparison only — InvokeFunction is load-only.
         g.bench_function("cranelift_hello_world", |b| {
             b.iter(|| {
                 let res = env

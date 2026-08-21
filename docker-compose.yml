@@ -8,7 +8,7 @@ services:
     environment:
       FLOCI_STORAGE_MODE: persistent
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
-    # Host-side e2e waits on :4566 via /dev/tcp (native image has no curl).
+    # Host-side e2e waits on :4566 via /dev/tcp (S3 + SQS + SNS on this port).
 
   dynamodb:
     image: amazon/dynamodb-local:latest

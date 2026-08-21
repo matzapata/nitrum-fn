@@ -14,6 +14,7 @@ application = { path = "crates/application" }
 executor = { path = "crates/executor" }
 catalog = { path = "crates/catalog" }
 artifacts = { path = "crates/artifacts" }
+messaging = { path = "crates/messaging" }
 runtime = { path = "crates/runtime" }
 runtime-macros = { path = "crates/runtime-macros" }
 api = { path = "crates/api" }
@@ -24,6 +25,8 @@ async-trait = "0.1"
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-sdk-sns = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
 axum = "0.8"
 criterion = "0.5"
 tempfile = "3"

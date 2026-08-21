@@ -51,16 +51,20 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
-    sid    = "CatalogReadWrite"
+    sid    = "CatalogRead"
     effect = "Allow"
     actions = [
       "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-      "dynamodb:DeleteItem",
       "dynamodb:Query",
     ]
     resources = [var.catalog_table_arn]
+  }
+
+  statement {
+    sid       = "PublishSns"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [var.publish_topic_arn]
   }
 }
 

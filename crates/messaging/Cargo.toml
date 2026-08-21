@@ -1,0 +1,16 @@
+[package]
+name = "messaging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SNS publish bus and SQS compile queue adapters"
+
+[dependencies]
+application = { workspace = true }
+domain = { workspace = true }
+async-trait = { workspace = true }
+aws-sdk-sns = { workspace = true }
+aws-sdk-sqs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

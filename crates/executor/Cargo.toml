@@ -16,6 +16,7 @@ wasmtime = { workspace = true }
 application = { workspace = true }
 artifacts = { workspace = true }
 catalog = { workspace = true }
+async-trait = { workspace = true }
 criterion = { workspace = true }
 domain = { workspace = true }
 runtime = { workspace = true }

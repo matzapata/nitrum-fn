@@ -4,5 +4,5 @@ mod error;
 mod http;
 mod state;
 
-pub use http::router;
+pub use http::{catalog_router, publish_router, router};
 pub use state::ApiState;

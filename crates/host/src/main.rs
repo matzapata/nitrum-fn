@@ -9,9 +9,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use api::ApiState;
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
-use application::{InvokeFunction, PublishFunction};
+use api::{catalog_router, publish_router};
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishBus};
+use application::{CompileQueuedFunction, InvokeFunction, PublishFunction};
 use artifacts::{FilesystemArtifactStore, S3ArtifactStore};
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::{
@@ -20,9 +20,13 @@ use aws_sdk_dynamodb::types::{
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_sns::Client as SnsClient;
+use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
+use aws_sdk_sqs::Client as SqsClient;
 use catalog::{DynamoDbCatalog, FilesystemCatalog};
-use domain::{FunctionId, PublishRequest};
+use domain::{FunctionId, PublishQueuedEvent};
 use executor::WasmtimeRunner;
+use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
 use tracing::{info, warn};
 
 use crate::config::{HostConfig, StoreBackend};
@@ -86,12 +90,8 @@ async fn main() -> Result<()> {
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
-    let publish = Arc::new(PublishFunction::new(
-        catalog.clone(),
-        artifacts.clone(),
-        runner.clone(),
-    ));
-    seed_dir(&publish, &config.seed_dir).await?;
+    let compile = CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), runner.clone());
+    seed_dir(&compile, &artifacts, &config.seed_dir).await?;
 
     let invoke = Arc::new(InvokeFunction::new(
         catalog.clone(),
@@ -99,7 +99,22 @@ async fn main() -> Result<()> {
         runner,
     ));
 
-    let app = http::router(AppState { invoke }).merge(api::router(ApiState { publish, catalog }));
+    let mut app = http::router(AppState { invoke }).merge(catalog_router(catalog));
+    match (config.store, build_publish_bus(&config).await?) {
+        (StoreBackend::Aws, Some(bus)) => {
+            let publish = Arc::new(PublishFunction::new(artifacts, bus));
+            app = app.merge(publish_router(publish));
+        }
+        (StoreBackend::Filesystem, Some(_)) => {
+            warn!(
+                "HTTP publish is disabled when NITRUM_FN_STORE=fs (seed + invoke only); \
+                 use NITRUM_FN_STORE=aws with publish-worker"
+            );
+        }
+        (_, None) => {
+            info!("publish disabled (no NITRUM_FN_SNS_TOPIC_ARN or NITRUM_FN_SQS_QUEUE_URL)");
+        }
+    }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     match config.store {
@@ -117,6 +132,8 @@ async fn main() -> Result<()> {
             s3_endpoint = ?config.s3_endpoint,
             table = ?config.ddb_table,
             ddb_endpoint = ?config.ddb_endpoint,
+            sns_topic_arn = ?config.sns_topic_arn,
+            sqs_queue_url = ?config.sqs_queue_url,
             seed_dir = %config.seed_dir.display(),
             store = "aws",
             "nitrum-fn host listening"
@@ -136,6 +153,30 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn build_publish_bus(config: &HostConfig) -> Result<Option<Arc<dyn PublishBus>>> {
+    if let Some(topic_arn) = &config.sns_topic_arn {
+        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let client = SnsClient::new(&sdk);
+        info!(%topic_arn, "publish bus: SNS");
+        return Ok(Some(Arc::new(SnsPublishBus::new(
+            client,
+            topic_arn.clone(),
+        ))));
+    }
+    let Some(queue_url) = config.sqs_queue_url.clone() else {
+        return Ok(None);
+    };
+    let client = build_sqs_client(config.sqs_endpoint.as_deref()).await?;
+    if config.sqs_create_queue {
+        ensure_queue(&client, &queue_url)
+            .await
+            .context("ensure SQS queue")?;
+        info!(%queue_url, "SQS queue ready");
+    }
+    info!(%queue_url, endpoint = ?config.sqs_endpoint, "publish bus: SQS direct");
+    Ok(Some(Arc::new(SqsPublishBus::new(client, queue_url))))
+}
+
 async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
     let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
     let mut builder = S3ConfigBuilder::from(&sdk);
@@ -143,6 +184,15 @@ async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
+}
+
+async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
+    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let mut builder = SqsConfigBuilder::from(&sdk);
+    if let Some(url) = endpoint {
+        builder = builder.endpoint_url(url);
+    }
+    Ok(SqsClient::from_conf(builder.build()))
 }
 
 async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
@@ -243,7 +293,12 @@ async fn wait_table_active(client: &DdbClient, table: &str) -> Result<()> {
     anyhow::bail!("DynamoDB table {table} did not become ACTIVE")
 }
 
-async fn seed_dir(publish: &PublishFunction, seed_dir: &Path) -> Result<()> {
+/// Boot-time fixtures: compile inline so seed works without a running worker.
+async fn seed_dir(
+    compile: &CompileQueuedFunction,
+    artifacts: &Arc<dyn ArtifactStore>,
+    seed_dir: &Path,
+) -> Result<()> {
     if !seed_dir.exists() {
         info!(
             seed_dir = %seed_dir.display(),
@@ -278,12 +333,19 @@ async fn seed_dir(publish: &PublishFunction, seed_dir: &Path) -> Result<()> {
             }
         };
 
-        match publish.execute(PublishRequest { function, wasm }).await {
-            Ok(res) => info!(
-                name = %res.function,
-                hash = %res.content_hash,
-                wasm_bytes = res.wasm_bytes,
-                compiled_bytes = res.compiled_bytes,
+        let hash = match artifacts.put(&wasm).await {
+            Ok(h) => h,
+            Err(err) => {
+                warn!(%name, error = %err, "skipping seed wasm");
+                continue;
+            }
+        };
+        let event = PublishQueuedEvent::new(function.to_string(), hash.to_hex(), wasm.len());
+        match compile.execute(&event).await {
+            Ok(()) => info!(
+                name = %function,
+                hash = %hash,
+                wasm_bytes = wasm.len(),
                 "seeded function @latest"
             ),
             Err(err) => warn!(%name, error = %err, "skipping seed wasm"),
@@ -294,6 +356,19 @@ async fn seed_dir(publish: &PublishFunction, seed_dir: &Path) -> Result<()> {
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+    }
     info!("shutdown signal received");
 }

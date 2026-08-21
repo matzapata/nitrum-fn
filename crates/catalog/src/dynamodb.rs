@@ -10,6 +10,7 @@ use domain::{ContentHash, FunctionId, FunctionVersion, VersionLabel};
 const ATTR_FN_ID: &str = "fn_id";
 const ATTR_LABEL: &str = "label";
 const ATTR_HASH: &str = "content_hash";
+const ATTR_QUEUED_AT: &str = "queued_at_ms";
 
 /// Persists catalog rows as DynamoDB items: `fn_id` (hash) + `label` (range) → `content_hash`.
 pub struct DynamoDbCatalog {
@@ -51,17 +52,35 @@ impl FunctionCatalog for DynamoDbCatalog {
         id: &FunctionId,
         label: &VersionLabel,
         hash: ContentHash,
-    ) -> Result<(), AppError> {
-        self.client
+        queued_at_ms: u64,
+    ) -> Result<bool, AppError> {
+        let incoming = queued_at_ms.to_string();
+        let result = self
+            .client
             .put_item()
             .table_name(&self.table)
             .item(ATTR_FN_ID, AttributeValue::S(id.as_str().to_string()))
             .item(ATTR_LABEL, AttributeValue::S(label.as_str().to_string()))
             .item(ATTR_HASH, AttributeValue::S(hash.to_hex()))
+            .item(ATTR_QUEUED_AT, AttributeValue::N(incoming.clone()))
+            .condition_expression("attribute_not_exists(#q) OR #q <= :incoming")
+            .expression_attribute_names("#q", ATTR_QUEUED_AT)
+            .expression_attribute_values(":incoming", AttributeValue::N(incoming))
             .send()
-            .await
-            .map_err(|e| AppError::Storage(e.to_string()))?;
-        Ok(())
+            .await;
+
+        match result {
+            Ok(_) => Ok(true),
+            Err(err)
+                if err
+                    .as_service_error()
+                    .map(|e| e.is_conditional_check_failed_exception())
+                    .unwrap_or(false) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(AppError::Storage(err.to_string())),
+        }
     }
 
     async fn resolve(
@@ -198,7 +217,7 @@ mod tests {
         let hash = ContentHash::from_bytes(b"hello");
 
         catalog
-            .upsert(&id, &label, hash.clone())
+            .upsert(&id, &label, hash.clone(), 1)
             .await
             .expect("upsert");
         let resolved = catalog.resolve(&id, &label).await.expect("resolve");
@@ -232,5 +251,43 @@ mod tests {
             .await
             .expect_err("missing");
         assert!(matches!(err, AppError::NotFound(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stale_upsert_does_not_clobber() {
+        let Some(client) = ddb_client().await else {
+            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            return;
+        };
+        let table = format!(
+            "nitrum-fn-catalog-stale-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        ensure_table(&client, &table).await;
+
+        let catalog = DynamoDbCatalog::new(client, table);
+        let id = FunctionId::new("echo").unwrap();
+        let label = VersionLabel::latest();
+        let old = ContentHash::from_bytes(b"old");
+        let new = ContentHash::from_bytes(b"new");
+
+        assert!(catalog
+            .upsert(&id, &label, old.clone(), 100)
+            .await
+            .expect("first"));
+        assert!(catalog
+            .upsert(&id, &label, new.clone(), 200)
+            .await
+            .expect("newer"));
+        assert!(!catalog
+            .upsert(&id, &label, old.clone(), 150)
+            .await
+            .expect("stale"));
+
+        let resolved = catalog.resolve(&id, &label).await.expect("resolve");
+        assert_eq!(resolved.content_hash, new);
     }
 }

@@ -1,0 +1,27 @@
+[package]
+name = "publish-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SQS consumer that AOT-compiles queued .wasm into .cwasm on publish"
+
+[[bin]]
+name = "nitrum-fn-publish-worker"
+path = "src/main.rs"
+
+[dependencies]
+application = { workspace = true }
+artifacts = { workspace = true }
+catalog = { workspace = true }
+domain = { workspace = true }
+executor = { workspace = true }
+messaging = { workspace = true }
+
+anyhow = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-sdk-sqs = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -55,7 +55,7 @@ jobs:
         with:
           shared-key: rust
           cache-on-failure: true
-      - name: Start Floci (S3) and DynamoDB Local
+      - name: Start Floci (S3+SQS) and DynamoDB Local
         run: docker compose up -d
       - name: Wait for emulators
         run: |

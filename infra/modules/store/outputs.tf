@@ -32,3 +32,23 @@ output "catalog_table_arn" {
   description = "ARN of the catalog table"
   value       = aws_dynamodb_table.catalog.arn
 }
+
+output "publish_topic_arn" {
+  description = "SNS topic ARN for publish-queued events"
+  value       = aws_sns_topic.publish.arn
+}
+
+output "compile_queue_url" {
+  description = "SQS queue URL for AOT compile workers"
+  value       = aws_sqs_queue.compile.url
+}
+
+output "compile_queue_arn" {
+  description = "SQS queue ARN for AOT compile workers"
+  value       = aws_sqs_queue.compile.arn
+}
+
+output "compile_dlq_arn" {
+  description = "SQS DLQ ARN for failed compile jobs"
+  value       = aws_sqs_queue.compile_dlq.arn
+}

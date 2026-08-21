@@ -5,12 +5,15 @@ use crate::AppError;
 
 #[async_trait]
 pub trait FunctionCatalog: Send + Sync {
+    /// Point `id`@`label` at `hash` if `queued_at_ms` is at least as new as the
+    /// generation already stored. Returns `false` when a newer generation won.
     async fn upsert(
         &self,
         id: &FunctionId,
         label: &VersionLabel,
         hash: ContentHash,
-    ) -> Result<(), AppError>;
+        queued_at_ms: u64,
+    ) -> Result<bool, AppError>;
 
     async fn resolve(
         &self,

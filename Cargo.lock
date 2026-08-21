@@ -98,10 +98,12 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
  "axum",
  "catalog",
  "domain",
- "executor",
+ "messaging",
  "serde",
  "serde_json",
  "tokio",
@@ -308,6 +310,59 @@ dependencies = [
  "sha2 0.11.0",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "aws-sdk-sns"
+version = "1.108.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51bb8c4966d06c03dfc75f2bafe3b2159c13c178b7ae5c57089d9bc5a79de1e1"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sqs"
+version = "1.106.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3f757d3be7ba736345ee3d5b22db7dc0c8c556da0aefb26e5d8aa07267dcc25"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -743,7 +798,9 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "domain",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1645,10 +1702,13 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
  "axum",
  "catalog",
  "domain",
  "executor",
+ "messaging",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -2112,6 +2172,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "messaging"
+version = "0.1.0"
+dependencies = [
+ "application",
+ "async-trait",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "domain",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2436,6 +2510,26 @@ checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
 dependencies = [
  "ar_archive_writer",
  "cc",
+]
+
+[[package]]
+name = "publish-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "application",
+ "artifacts",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-s3",
+ "aws-sdk-sqs",
+ "catalog",
+ "domain",
+ "executor",
+ "messaging",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

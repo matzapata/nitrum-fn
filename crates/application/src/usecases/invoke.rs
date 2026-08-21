@@ -63,8 +63,9 @@ mod tests {
             _id: &FunctionId,
             _label: &VersionLabel,
             _hash: ContentHash,
-        ) -> Result<(), AppError> {
-            Ok(())
+            _queued_at_ms: u64,
+        ) -> Result<bool, AppError> {
+            Ok(true)
         }
 
         async fn resolve(
