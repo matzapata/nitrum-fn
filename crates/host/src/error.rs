@@ -22,6 +22,7 @@ impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             AppError::NotFound(_) | AppError::ArtifactMissing(_) => StatusCode::NOT_FOUND,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
                 StatusCode::BAD_REQUEST
             }

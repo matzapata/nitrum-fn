@@ -31,17 +31,29 @@ impl CompileQueuedFunction {
         let function = FunctionId::new(&event.function).map_err(AppError::from)?;
         let hash = ContentHash::from_hex(&event.content_hash).map_err(AppError::from)?;
 
-        let wasm = self.artifacts.get(&hash).await?;
-        let actual = ContentHash::from_bytes(&wasm);
-        if actual != hash {
-            return Err(AppError::HashMismatch {
-                expected: hash.to_hex(),
-                actual: actual.to_hex(),
-            });
+        match self.artifacts.get_compiled(&hash).await {
+            Ok(_) => {
+                tracing::info!(
+                    hash = %event.content_hash,
+                    "skipping compile; cwasm already present"
+                );
+            }
+            Err(AppError::ArtifactMissing(_)) => {
+                let wasm = self.artifacts.get(&hash).await?;
+                let actual = ContentHash::from_bytes(&wasm);
+                if actual != hash {
+                    return Err(AppError::HashMismatch {
+                        expected: hash.to_hex(),
+                        actual: actual.to_hex(),
+                    });
+                }
+
+                let compiled = self.runner.compile(&hash, &wasm).await?;
+                self.artifacts.put_compiled(&hash, &compiled).await?;
+            }
+            Err(err) => return Err(err),
         }
 
-        let compiled = self.runner.compile(&hash, &wasm).await?;
-        self.artifacts.put_compiled(&hash, &compiled).await?;
         let applied = self
             .catalog
             .upsert(&function, &VersionLabel::latest(), hash, event.queued_at_ms)
@@ -140,6 +152,14 @@ mod tests {
                 compiled: Mutex::new(HashMap::new()),
             }
         }
+
+        fn with_both(hash: &ContentHash, wasm: Vec<u8>, compiled: Vec<u8>) -> Self {
+            let key = hash.to_hex();
+            Self {
+                wasm: Mutex::new(HashMap::from([(key.clone(), wasm)])),
+                compiled: Mutex::new(HashMap::from([(key, compiled)])),
+            }
+        }
     }
 
     #[async_trait]
@@ -180,11 +200,22 @@ mod tests {
         }
     }
 
-    struct Runner;
+    struct Runner {
+        compiles: Mutex<u32>,
+    }
+
+    impl Runner {
+        fn new() -> Self {
+            Self {
+                compiles: Mutex::new(0),
+            }
+        }
+    }
 
     #[async_trait]
     impl FunctionRunner for Runner {
         async fn compile(&self, _hash: &ContentHash, _wasm: &[u8]) -> Result<Vec<u8>, AppError> {
+            *self.compiles.lock().unwrap() += 1;
             Ok(b"cwasm".to_vec())
         }
 
@@ -223,7 +254,8 @@ mod tests {
         let artifacts = Arc::new(MemArtifacts::with_wasm(&claimed, wasm));
         // store under claimed key but bytes hash to something else
         let catalog = Arc::new(MemCatalog::new());
-        let compile = CompileQueuedFunction::new(catalog.clone(), artifacts, Arc::new(Runner));
+        let compile =
+            CompileQueuedFunction::new(catalog.clone(), artifacts, Arc::new(Runner::new()));
         let err = compile
             .execute(&event(&claimed, 1))
             .await
@@ -238,11 +270,35 @@ mod tests {
         let hash = ContentHash::from_bytes(&wasm);
         let artifacts = Arc::new(MemArtifacts::with_wasm(&hash, wasm));
         let catalog = Arc::new(MemCatalog::new());
+        let runner = Arc::new(Runner::new());
         let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), Arc::new(Runner));
+            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), runner.clone());
         compile.execute(&event(&hash, 10)).await.expect("compile");
         assert_eq!(catalog.hash.lock().unwrap().as_ref(), Some(&hash));
         assert_eq!(artifacts.get_compiled(&hash).await.unwrap(), b"cwasm");
+        assert_eq!(*runner.compiles.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn existing_cwasm_skips_compile() {
+        let wasm = b"wasm".to_vec();
+        let hash = ContentHash::from_bytes(&wasm);
+        let artifacts = Arc::new(MemArtifacts::with_both(
+            &hash,
+            wasm,
+            b"already-cwasm".to_vec(),
+        ));
+        let catalog = Arc::new(MemCatalog::new());
+        let runner = Arc::new(Runner::new());
+        let compile =
+            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), runner.clone());
+        compile.execute(&event(&hash, 10)).await.expect("skip");
+        assert_eq!(catalog.hash.lock().unwrap().as_ref(), Some(&hash));
+        assert_eq!(
+            artifacts.get_compiled(&hash).await.unwrap(),
+            b"already-cwasm"
+        );
+        assert_eq!(*runner.compiles.lock().unwrap(), 0);
     }
 
     #[tokio::test]
@@ -252,7 +308,7 @@ mod tests {
         let artifacts = Arc::new(MemArtifacts::with_wasm(&hash, wasm));
         let catalog = Arc::new(MemCatalog::stale());
         let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), Arc::new(Runner));
+            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), Arc::new(Runner::new()));
         compile.execute(&event(&hash, 1)).await.expect("ok");
         assert!(catalog.hash.lock().unwrap().is_none());
         assert_eq!(artifacts.get_compiled(&hash).await.unwrap(), b"cwasm");

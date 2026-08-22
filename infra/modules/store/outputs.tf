@@ -33,6 +33,16 @@ output "catalog_table_arn" {
   value       = aws_dynamodb_table.catalog.arn
 }
 
+output "idempotency_table_name" {
+  description = "DynamoDB table for publish Idempotency-Key records"
+  value       = aws_dynamodb_table.idempotency.name
+}
+
+output "idempotency_table_arn" {
+  description = "ARN of the publish idempotency table"
+  value       = aws_dynamodb_table.idempotency.arn
+}
+
 output "publish_topic_arn" {
   description = "SNS topic ARN for publish-queued events"
   value       = aws_sns_topic.publish.arn

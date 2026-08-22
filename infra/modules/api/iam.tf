@@ -28,14 +28,14 @@ resource "aws_iam_role" "task" {
 
 data "aws_iam_policy_document" "task" {
   statement {
-    sid    = "ArtifactsReadWrite"
+    sid    = "ArtifactsWasmReadWrite"
     effect = "Allow"
     actions = [
       "s3:GetObject",
       "s3:PutObject",
       "s3:AbortMultipartUpload",
     ]
-    resources = ["${var.artifacts_bucket_arn}/artifacts/*"]
+    resources = ["${var.artifacts_bucket_arn}/artifacts/*.wasm"]
   }
 
   statement {
@@ -58,6 +58,16 @@ data "aws_iam_policy_document" "task" {
       "dynamodb:Query",
     ]
     resources = [var.catalog_table_arn]
+  }
+
+  statement {
+    sid    = "IdempotencyReadWrite"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+    ]
+    resources = [var.idempotency_table_arn]
   }
 
   statement {

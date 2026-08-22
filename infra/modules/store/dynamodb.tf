@@ -24,3 +24,29 @@ resource "aws_dynamodb_table" "catalog" {
     enabled = var.retain
   }
 }
+
+resource "aws_dynamodb_table" "idempotency" {
+  name                        = local.idempotency_table_name
+  billing_mode                = "PAY_PER_REQUEST"
+  deletion_protection_enabled = var.retain
+
+  hash_key = "idempotency_key"
+
+  attribute {
+    name = "idempotency_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
+    enabled = var.retain
+  }
+}

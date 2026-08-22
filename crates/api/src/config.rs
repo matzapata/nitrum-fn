@@ -17,6 +17,8 @@ pub struct ApiConfig {
     pub ddb_table: Option<String>,
     pub ddb_endpoint: Option<String>,
     pub ddb_create_table: bool,
+    /// Derived as `{catalog}-idempotency` unless `NITRUM_FN_DDB_IDEMPOTENCY_TABLE` is set.
+    pub ddb_idempotency_table: Option<String>,
     /// Cloud: SNS topic for publish fan-out.
     pub sns_topic_arn: Option<String>,
     /// Local (Floci) or direct enqueue when SNS is unset.
@@ -59,6 +61,10 @@ impl ApiConfig {
             .ok()
             .filter(|s| !s.is_empty());
         let ddb_create_table = env_flag("NITRUM_FN_DDB_CREATE_TABLE");
+        let ddb_idempotency_table = std::env::var("NITRUM_FN_DDB_IDEMPOTENCY_TABLE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| ddb_table.as_ref().map(|t| format!("{t}-idempotency")));
         let sns_topic_arn = std::env::var("NITRUM_FN_SNS_TOPIC_ARN")
             .ok()
             .filter(|s| !s.is_empty());
@@ -80,6 +86,7 @@ impl ApiConfig {
             ddb_table,
             ddb_endpoint,
             ddb_create_table,
+            ddb_idempotency_table,
             sns_topic_arn,
             sqs_queue_url,
             sqs_endpoint,

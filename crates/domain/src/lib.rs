@@ -6,6 +6,6 @@ mod invoke;
 mod publish;
 
 pub use error::DomainError;
-pub use function::{ContentHash, FunctionId, FunctionVersion, VersionLabel};
+pub use function::{ContentHash, FunctionId, FunctionVersion, IdempotencyKey, VersionLabel};
 pub use invoke::{InvokeRequest, InvokeResponse};
 pub use publish::{PublishQueuedEvent, PublishRequest, PublishResponse};

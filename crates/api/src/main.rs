@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use api::ApiState;
-use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
+use application::ports::{ArtifactStore, FunctionCatalog, PublishBus, PublishIdempotency};
 use application::PublishFunction;
 use artifacts::{FilesystemArtifactStore, S3ArtifactStore};
 use aws_config::BehaviorVersion;
@@ -18,7 +18,9 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
 use aws_sdk_sqs::Client as SqsClient;
-use catalog::{DynamoDbCatalog, FilesystemCatalog};
+use catalog::{
+    DynamoDbCatalog, DynamoDbPublishIdempotency, FilesystemCatalog, FilesystemPublishIdempotency,
+};
 use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
 use tracing::info;
 
@@ -35,7 +37,7 @@ async fn main() -> Result<()> {
 
     let config = ApiConfig::from_env();
 
-    let (catalog, artifacts) = match config.store {
+    let (catalog, artifacts, idempotency) = match config.store {
         StoreBackend::Filesystem => {
             tokio::fs::create_dir_all(&config.artifact_dir)
                 .await
@@ -49,7 +51,15 @@ async fn main() -> Result<()> {
             );
             let artifacts: Arc<dyn ArtifactStore> =
                 Arc::new(FilesystemArtifactStore::new(config.artifact_dir.clone()));
-            (catalog, artifacts)
+            let idempotency_path = config.catalog_path.with_file_name("idempotency.json");
+            let idempotency: Arc<dyn PublishIdempotency> = Arc::new(
+                FilesystemPublishIdempotency::open(&idempotency_path)
+                    .await
+                    .with_context(|| {
+                        format!("open idempotency store {}", idempotency_path.display())
+                    })?,
+            );
+            (catalog, artifacts, idempotency)
         }
         StoreBackend::Aws => {
             let bucket = config
@@ -60,6 +70,10 @@ async fn main() -> Result<()> {
                 .ddb_table
                 .clone()
                 .context("NITRUM_FN_DDB_TABLE is required when NITRUM_FN_STORE=aws")?;
+            let idem_table = config
+                .ddb_idempotency_table
+                .clone()
+                .context("NITRUM_FN_DDB_IDEMPOTENCY_TABLE is required when NITRUM_FN_STORE=aws")?;
             let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
             let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
             if config.s3_create_bucket {
@@ -67,18 +81,28 @@ async fn main() -> Result<()> {
             }
             if config.ddb_create_table {
                 ensure_table(&ddb, &table).await?;
+                DynamoDbPublishIdempotency::ensure_table(&ddb, &idem_table)
+                    .await
+                    .context("ensure idempotency table")?;
             }
             let catalog: Arc<dyn FunctionCatalog> =
-                Arc::new(DynamoDbCatalog::new(ddb, table.clone()));
+                Arc::new(DynamoDbCatalog::new(ddb.clone(), table.clone()));
             let artifacts: Arc<dyn ArtifactStore> =
                 Arc::new(S3ArtifactStore::new(s3, bucket.clone(), "artifacts"));
-            info!(%bucket, %table, "using S3 artifacts and DynamoDB catalog");
-            (catalog, artifacts)
+            let idempotency: Arc<dyn PublishIdempotency> =
+                Arc::new(DynamoDbPublishIdempotency::new(ddb, idem_table.clone()));
+            info!(
+                %bucket,
+                %table,
+                %idem_table,
+                "using S3 artifacts and DynamoDB catalog"
+            );
+            (catalog, artifacts, idempotency)
         }
     };
 
     let bus = build_publish_bus(&config).await?;
-    let publish = Arc::new(PublishFunction::new(artifacts, bus));
+    let publish = Arc::new(PublishFunction::new(artifacts, bus, idempotency));
 
     let app = api::router(ApiState { publish, catalog });
 

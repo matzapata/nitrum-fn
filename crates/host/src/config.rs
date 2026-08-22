@@ -20,6 +20,7 @@ pub struct HostConfig {
     pub ddb_table: Option<String>,
     pub ddb_endpoint: Option<String>,
     pub ddb_create_table: bool,
+    pub ddb_idempotency_table: Option<String>,
     pub sns_topic_arn: Option<String>,
     pub sqs_queue_url: Option<String>,
     pub sqs_endpoint: Option<String>,
@@ -66,6 +67,15 @@ impl HostConfig {
                 .ok()
                 .filter(|s| !s.is_empty()),
             ddb_create_table: env_flag("NITRUM_FN_DDB_CREATE_TABLE"),
+            ddb_idempotency_table: std::env::var("NITRUM_FN_DDB_IDEMPOTENCY_TABLE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    std::env::var("NITRUM_FN_DDB_TABLE")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .map(|t| format!("{t}-idempotency"))
+                }),
             sns_topic_arn: std::env::var("NITRUM_FN_SNS_TOPIC_ARN")
                 .ok()
                 .filter(|s| !s.is_empty()),

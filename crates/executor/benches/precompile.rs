@@ -87,6 +87,7 @@ struct BenchEnv {
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
     hash: ContentHash,
+    cwasm_path: std::path::PathBuf,
     payload: Vec<u8>,
     function: FunctionId,
 }
@@ -95,7 +96,8 @@ impl BenchEnv {
     fn new() -> Self {
         let dir = TempDir::new().expect("tempdir");
         let rt = Runtime::new().expect("tokio runtime");
-        let artifacts = Arc::new(FilesystemArtifactStore::new(dir.path().join("artifacts")));
+        let artifact_dir = dir.path().join("artifacts");
+        let artifacts = Arc::new(FilesystemArtifactStore::new(artifact_dir.clone()));
         let catalog = Arc::new(InMemoryCatalog::new());
         let runner = Arc::new(WasmtimeRunner::new().expect("runner"));
         let bus = Arc::new(MemBus::new());
@@ -107,6 +109,8 @@ impl BenchEnv {
         let publish = Arc::new(PublishFunction::new(
             artifacts.clone() as Arc<dyn ArtifactStore>,
             bus.clone() as Arc<dyn PublishBus>,
+            Arc::new(catalog::InMemoryPublishIdempotency::new())
+                as Arc<dyn application::ports::PublishIdempotency>,
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
@@ -121,6 +125,7 @@ impl BenchEnv {
             .block_on(publish.execute(PublishRequest {
                 function: function.clone(),
                 wasm: wasm.clone(),
+                idempotency_key: None,
             }))
             .expect("seed publish");
         for event in rt.block_on(bus.take()) {
@@ -136,7 +141,8 @@ impl BenchEnv {
             publish,
             invoke,
             wasm,
-            hash: published.content_hash,
+            hash: published.content_hash.clone(),
+            cwasm_path: artifact_dir.join(format!("{}.cwasm", published.content_hash.to_hex())),
             payload,
             function,
         }
@@ -162,6 +168,7 @@ fn host_path_benches(c: &mut Criterion) {
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
+                    idempotency_key: None,
                 }));
                 let _ = env.rt.block_on(env.bus.take());
                 black_box(res.expect("publish"));
@@ -180,6 +187,7 @@ fn host_path_benches(c: &mut Criterion) {
                     env.hash.to_hex(),
                     env.wasm.len(),
                 );
+                let _ = std::fs::remove_file(&env.cwasm_path);
                 let res = env.rt.block_on(env.compile.execute(&event));
                 res.expect("compile");
                 black_box(());

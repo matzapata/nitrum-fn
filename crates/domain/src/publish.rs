@@ -1,9 +1,10 @@
-use crate::{ContentHash, FunctionId, VersionLabel};
+use crate::{ContentHash, FunctionId, IdempotencyKey, VersionLabel};
 
 #[derive(Debug, Clone)]
 pub struct PublishRequest {
     pub function: FunctionId,
     pub wasm: Vec<u8>,
+    pub idempotency_key: Option<IdempotencyKey>,
 }
 
 #[derive(Debug, Clone)]

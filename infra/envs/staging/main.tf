@@ -21,8 +21,10 @@ module "api" {
   private_subnet_ids    = module.network.private_subnet_ids
   artifacts_bucket_name = module.store.artifacts_bucket_name
   artifacts_bucket_arn  = module.store.artifacts_bucket_arn
-  catalog_table_name    = module.store.catalog_table_name
-  catalog_table_arn     = module.store.catalog_table_arn
+  catalog_table_name     = module.store.catalog_table_name
+  catalog_table_arn      = module.store.catalog_table_arn
+  idempotency_table_name = module.store.idempotency_table_name
+  idempotency_table_arn  = module.store.idempotency_table_arn
   publish_topic_arn     = module.store.publish_topic_arn
   image_tag             = var.api_image_tag
   desired_count         = var.api_desired_count

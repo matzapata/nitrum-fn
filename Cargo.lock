@@ -95,6 +95,7 @@ dependencies = [
  "anyhow",
  "application",
  "artifacts",
+ "async-trait",
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
@@ -107,6 +108,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -919,6 +921,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3781,6 +3784,7 @@ version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "wasm-bindgen",
 ]

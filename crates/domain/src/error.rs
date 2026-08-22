@@ -10,4 +10,7 @@ pub enum DomainError {
 
     #[error("invalid content hash: {0}")]
     InvalidContentHash(String),
+
+    #[error("invalid idempotency key: {0}")]
+    InvalidIdempotencyKey(String),
 }

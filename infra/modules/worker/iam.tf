@@ -28,14 +28,22 @@ resource "aws_iam_role" "task" {
 
 data "aws_iam_policy_document" "task" {
   statement {
-    sid    = "ArtifactsReadWrite"
+    sid    = "ArtifactsRead"
     effect = "Allow"
     actions = [
       "s3:GetObject",
+    ]
+    resources = ["${var.artifacts_bucket_arn}/artifacts/*"]
+  }
+
+  statement {
+    sid    = "ArtifactsCompiledWrite"
+    effect = "Allow"
+    actions = [
       "s3:PutObject",
       "s3:AbortMultipartUpload",
     ]
-    resources = ["${var.artifacts_bucket_arn}/artifacts/*"]
+    resources = ["${var.artifacts_bucket_arn}/artifacts/*.cwasm"]
   }
 
   statement {
