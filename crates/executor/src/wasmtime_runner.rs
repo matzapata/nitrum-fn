@@ -18,6 +18,19 @@ impl WasmtimeRunner {
     pub fn new() -> Result<Self, AppError> {
         let mut config = wasmtime::Config::new();
         config.async_support(false);
+        // Nitro EIFs are ~4GiB total. Wasmtime's 64-bit defaults reserve 4GiB of
+        // VA per memory plus a guard region, and install SIGSEGV handlers. Either
+        // can abort the guest; the data-plane then exits and the enclave dies.
+        // Spectre mitigations must be off when signals-based traps are off.
+        unsafe {
+            config.cranelift_flag_set("enable_heap_access_spectre_mitigation", "false");
+            config.cranelift_flag_set("enable_table_access_spectre_mitigation", "false");
+        }
+        config.signals_based_traps(false);
+        config.memory_reservation(0);
+        config.memory_guard_size(0);
+        config.guard_before_linear_memory(false);
+        config.memory_reservation_for_growth(16 * 1024 * 1024);
         let engine = Engine::new(&config).map_err(|e| AppError::Compile(e.to_string()))?;
         Ok(Self { engine })
     }

@@ -28,14 +28,14 @@ output "eif_bucket_name" {
   value       = module.store.eif_bucket_name
 }
 
-output "ecr_repository_url" {
-  description = "ECR repository for nitrum-fn-api"
-  value       = module.api.ecr_repository_url
+output "api_image" {
+  description = "Container image URI the API task pulls"
+  value       = var.api_image
 }
 
-output "worker_ecr_repository_url" {
-  description = "ECR repository for nitrum-fn-publish-worker"
-  value       = module.worker.ecr_repository_url
+output "worker_image" {
+  description = "Container image URI the publish-worker task pulls"
+  value       = var.worker_image
 }
 
 output "publish_topic_arn" {

@@ -15,7 +15,7 @@ use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::{MetricExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::Resource;
-use tracing::info;
+use tracing::{info, warn};
 
 static INVOKE_METRICS: OnceLock<InvokeMetrics> = OnceLock::new();
 
@@ -30,18 +30,36 @@ struct InvokeMetrics {
 }
 
 impl Telemetry {
-    /// Init OTLP metrics when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; otherwise no-op.
-    pub fn init() -> Result<Self> {
+    /// No-op metrics (used when OTLP is unset or exporter setup fails).
+    fn disabled() -> Self {
+        let _ = INVOKE_METRICS.get_or_init(InvokeMetrics::noop);
+        Self {
+            meter_provider: None,
+        }
+    }
+
+    /// Init OTLP metrics when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+    ///
+    /// Never fails startup: Nitrum injects OTLP into every guest, and a bad
+    /// exporter must not take down the process (the data-plane exits with it).
+    pub fn init() -> Self {
+        match Self::try_init() {
+            Ok(telemetry) => telemetry,
+            Err(err) => {
+                warn!(error = %format!("{err:#}"), "OTLP metrics disabled");
+                Self::disabled()
+            }
+        }
+    }
+
+    fn try_init() -> Result<Self> {
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
             .ok()
             .filter(|s| !s.is_empty());
 
         let Some(endpoint) = endpoint else {
             info!("OTEL_EXPORTER_OTLP_ENDPOINT unset — invoke metrics disabled");
-            let _ = INVOKE_METRICS.get_or_init(InvokeMetrics::noop);
-            return Ok(Self {
-                meter_provider: None,
-            });
+            return Ok(Self::disabled());
         };
 
         let service_name = std::env::var("OTEL_SERVICE_NAME")

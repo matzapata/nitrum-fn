@@ -76,33 +76,26 @@ Two deployables share one VPC by default: **API** (Fargate + HTTP ALB) and **pub
 
 `nitrum build` always builds `./Dockerfile` as **linux/amd64** (QEMU on Apple Silicon). The API is `Dockerfile.api`; the publish worker is `Dockerfile.publish-worker` (musl, so `.cwasm` matches the enclave).
 
-### 1. Terraform (API only)
+Fargate pulls **public** images. CI on `main` publishes `ghcr.io/matzapata/nitrum-fn/api` and `ghcr.io/matzapata/nitrum-fn/publish-worker` (those are the Terraform defaults). Make the GHCR packages public (repo → Packages → package settings → Change visibility) so ECS can pull without a PAT. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry.
+
+### 1. Terraform (API + worker)
 
 ```bash
 cd infra/envs/staging
-cp backend.hcl.example backend.hcl          # bucket, lock table, region
+cp backend.hcl.example backend.hcl          # bucket, lock table, region; gitignored
 cp terraform.tfvars.example terraform.tfvars  # enable_enclave = false
 terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-### 2. Push `nitrum-fn-api` and `nitrum-fn-publish-worker`
+Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can publish here (CLI polls until the worker catalogs the function); invoke needs the enclave. If you retag `:latest` without changing the image URI, force a new ECS deployment:
 
 ```bash
-AWS_REGION=us-east-1
-ECR=$(terraform -chdir=infra/envs/staging output -raw ecr_repository_url)
-WORKER_ECR=$(terraform -chdir=infra/envs/staging output -raw worker_ecr_repository_url)
-aws ecr get-login-password --region "$AWS_REGION" \
-  | docker login --username AWS --password-stdin "${ECR%%/*}"
-docker build --platform linux/amd64 -f Dockerfile.api -t "$ECR:latest" .
-docker push "$ECR:latest"
-docker build --platform linux/amd64 -f Dockerfile.publish-worker -t "$WORKER_ECR:latest" .
-docker push "$WORKER_ECR:latest"
+aws ecs update-service --cluster nitrum-fn-api --service nitrum-fn-api --force-new-deployment
+aws ecs update-service --cluster nitrum-fn-worker --service nitrum-fn-worker --force-new-deployment
 ```
 
-Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can publish here (CLI polls until the worker catalogs the function); invoke needs the enclave.
-
-### 3. Build and upload the EIF
+### 2. Build the EIF
 
 `nitrum.toml` is copied into the EIF. Keep `acme = false`. From the repo root (`nitrum build` reads `./Dockerfile` + `nitrum.toml`):
 
@@ -110,14 +103,9 @@ Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/hea
 nitrum build
 ```
 
-That writes `.nitrum/artifacts/nitrum-fn.eif` and prints **EIF hash (sha256)** and **PCR0**. Re-inspect later with `nitrum describe` (see [Nitrum usage](https://github.com/matzapata/nitrum/blob/develop/docs/usage.md)).
+That writes `.nitrum/artifacts/nitrum-fn.eif` and prints **EIF hash (sha256)** and **PCR0**. Re-inspect later with `nitrum describe` (see [Nitrum usage](https://github.com/matzapata/nitrum/blob/develop/docs/usage.md)). Terraform uploads the EIF on the next apply (no `aws s3 cp`).
 
-```bash
-EIF_BUCKET=$(terraform -chdir=infra/envs/staging output -raw eif_bucket_name)
-aws s3 cp .nitrum/artifacts/nitrum-fn.eif "s3://$EIF_BUCKET/enclave.eif"
-```
-
-### 4. Enable the fleet
+### 3. Enable the fleet
 
 In `infra/envs/staging/terraform.tfvars`:
 
@@ -131,9 +119,9 @@ eif_image_sha384  = "<PCR0 from nitrum build>"
 terraform -chdir=infra/envs/staging apply
 ```
 
-Every new EIF: upload, bump **both** labels, apply (launch template rolls the ASG).
+The apply uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates the NLB/ASG. Every new EIF: `nitrum build`, bump **both** labels, apply (object updates, launch template rolls the ASG).
 
-### 5. Cloud smoke
+### 4. Cloud smoke
 
 Enclave boot can take several minutes (`cloud.sh` waits up to 10 minutes).
 
@@ -152,7 +140,7 @@ This job is **not** in GitHub Actions.
 | File | Binary | Where |
 |---|---|---|
 | `Dockerfile` | data-plane + `nitrum-fn-host` | EIF via `nitrum build` |
-| `Dockerfile.api` | `nitrum-fn-api` | Fargate / ECR (store `.wasm`, SNS publish) |
-| `Dockerfile.publish-worker` | `nitrum-fn-publish-worker` (musl) | Fargate / ECR (SQS → AOT `.cwasm`) |
+| `Dockerfile.api` | `nitrum-fn-api` | Fargate / GHCR `…/api` (store `.wasm`, SNS publish) |
+| `Dockerfile.publish-worker` | `nitrum-fn-publish-worker` (musl) | Fargate / GHCR `…/publish-worker` (SQS → AOT `.cwasm`) |
 
 The **publish-worker** must be musl so `.cwasm` matches the enclave. Invoke **only deserializes** `.cwasm`. After rolling a new worker image, **republish** functions so S3 AOT blobs are rebuilt.

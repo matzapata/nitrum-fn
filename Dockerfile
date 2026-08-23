@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-#
 # Enclave image for `nitrum build` (always `docker build -f Dockerfile`).
 # Data-plane is Alpine/musl, so the host is built for x86_64-unknown-linux-musl.
 # Fargate API image: Dockerfile.api.

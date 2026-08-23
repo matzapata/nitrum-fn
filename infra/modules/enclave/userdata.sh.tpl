@@ -27,21 +27,33 @@ set +e
 usermod -aG docker ec2-user
 usermod -aG ne ec2-user
 
+# Instance id for CloudWatch log stream names below. Docker's `awslogs` driver
+# ships container stdout/stderr straight to CloudWatch Logs, independent of
+# the OTel/ADOT pipeline (which only starts *after* control-plane, and is
+# itself fed by control-plane's own OTLP export). Without this, any failure
+# in the first seconds of boot (bad IAM, bad EIF, gvproxy failure, nitro-cli
+# failure) is only visible via an SSM session + `docker logs control-plane`.
+IMDS_TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+INSTANCE_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+INSTANCE_ID="$${INSTANCE_ID:-unknown}"
+
 # Nitro enclaves allocator (must align with enclave_cpu_count / enclave_memory_mib)
 ALLOCATOR_YAML=/etc/nitro_enclaves/allocator.yaml
 sed -r "s/^(\s*memory_mib\s*:\s*).*/\1 ${enclave_memory_mib}/" -i "$ALLOCATOR_YAML"
 sed -r "s/^(\s*cpu_count\s*:\s*).*/\1 ${enclave_cpu_count}/" -i "$ALLOCATOR_YAML"
 
-# Enable services
+# Enable services. Restart the allocator after writing yaml: package install
+# may have started it with the default (empty) CPU pool.
 systemctl enable --now docker
-systemctl enable --now nitro-enclaves-allocator.service
+systemctl enable nitro-enclaves-allocator.service
+systemctl restart nitro-enclaves-allocator.service
 systemctl enable --now nitro-enclaves-vsock-proxy.service
 
 sleep 5
 
 docker pull "${control_plane_image}"
 
-cat > /etc/systemd/system/control-plane.service <<'UNIT_EOF'
+cat > /etc/systemd/system/control-plane.service <<UNIT_EOF
 [Unit]
 Description=Nitrum control-plane (gvproxy + enclave)
 After=docker.service nitro-enclaves-allocator.service
@@ -51,7 +63,7 @@ Type=simple
 Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/docker rm -f control-plane
-ExecStart=/usr/bin/docker run --rm --name control-plane --privileged --security-opt seccomp=unconfined -e NITRUM_PROJECT_NAME=${project_name} -e AWS_DEFAULT_REGION=${aws_region} -e NITRUM_OTLP_ENDPOINT=http://127.0.0.1:4317 -p 80:80 -p 443:443 -p 4317:4317 ${control_plane_image} /app/control-plane --eif-bucket ${eif_s3_bucket} --eif-hash ${eif_version_label} --cpu-count ${enclave_cpu_count} --memory-mib ${enclave_memory_mib} ${control_plane_debug_arg}
+ExecStart=/usr/bin/docker run --rm --name control-plane --privileged --security-opt seccomp=unconfined -e NITRUM_PROJECT_NAME=${project_name} -e AWS_DEFAULT_REGION=${aws_region} -e NITRUM_OTLP_ENDPOINT=http://127.0.0.1:4317 --log-driver awslogs --log-opt awslogs-region=${aws_region} --log-opt awslogs-group=/nitrum/${project_name}/control-plane --log-opt awslogs-create-group=false --log-opt awslogs-stream=$INSTANCE_ID -p 80:80 -p 443:443 -p 4317:4317 ${control_plane_image} /app/control-plane --eif-bucket ${eif_s3_bucket} --eif-hash ${eif_version_label} --cpu-count ${enclave_cpu_count} --memory-mib ${enclave_memory_mib} ${control_plane_debug_arg}
 ExecStop=/usr/bin/docker stop -t 10 control-plane
 TimeoutStopSec=30
 [Install]
@@ -132,7 +144,7 @@ fi
 
 docker pull "${otel_collector_image}"
 
-cat > /etc/systemd/system/otel-collector.service <<'UNIT_EOF'
+cat > /etc/systemd/system/otel-collector.service <<UNIT_EOF
 [Unit]
 Description=Nitrum OpenTelemetry Collector (ADOT)
 After=control-plane.service
@@ -142,7 +154,7 @@ Type=simple
 Restart=always
 RestartSec=10
 ExecStartPre=-/usr/bin/docker rm -f otel-collector
-ExecStart=/usr/bin/docker run --rm --name otel-collector --network container:control-plane -e AWS_REGION=${aws_region} -v /opt/nitrum/otelcol-config.yaml:/etc/otelcol/config.yaml ${otel_collector_image} --config /etc/otelcol/config.yaml
+ExecStart=/usr/bin/docker run --rm --name otel-collector --network container:control-plane -e AWS_REGION=${aws_region} --log-driver awslogs --log-opt awslogs-region=${aws_region} --log-opt awslogs-group=/nitrum/${project_name}/control-plane --log-opt awslogs-create-group=false --log-opt awslogs-stream=$INSTANCE_ID-otel-collector -v /opt/nitrum/otelcol-config.yaml:/etc/otelcol/config.yaml ${otel_collector_image} --config /etc/otelcol/config.yaml
 ExecStop=/usr/bin/docker stop -t 10 otel-collector
 TimeoutStopSec=30
 [Install]

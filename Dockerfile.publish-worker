@@ -1,6 +1,5 @@
-# syntax=docker/dockerfile:1.7
-#
 # Fargate publish worker (`nitrum-fn-publish-worker`). Must be musl so .cwasm matches the enclave.
+# Published to GHCR by CI (`ghcr.io/matzapata/nitrum-fn/publish-worker`).
 # Build: docker build --platform linux/amd64 -f Dockerfile.publish-worker -t … .
 FROM --platform=linux/amd64 rust:1.95-bookworm AS builder
 
@@ -8,16 +7,18 @@ WORKDIR /build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends musl-tools \
-    && rm -rf /var/lib/apt/lists/* \
-    && rustup target add x86_64-unknown-linux-musl
+    && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 
+# rust-toolchain.toml makes rustup reinstall 1.95 (extra components). Add musl
+# on that toolchain, not the image default from an earlier layer.
 RUN --mount=type=cache,id=nitrum-fn-publish-worker-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=nitrum-fn-publish-worker-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=nitrum-fn-publish-worker-target,target=/build/target,sharing=locked \
-    cargo build --locked --release --target x86_64-unknown-linux-musl -p publish-worker --bin nitrum-fn-publish-worker \
+    rustup target add x86_64-unknown-linux-musl \
+    && cargo build --locked --release --target x86_64-unknown-linux-musl -p publish-worker --bin nitrum-fn-publish-worker \
     && mkdir -p /out \
     && cp /build/target/x86_64-unknown-linux-musl/release/nitrum-fn-publish-worker /out/nitrum-fn-publish-worker
 

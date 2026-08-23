@@ -17,5 +17,5 @@ variable "retain" {
 variable "eif_s3_key" {
   type        = string
   default     = "enclave.eif"
-  description = "S3 object key of the EIF file (IAM on the enclave role targets this key)."
+  description = "S3 object key of the EIF (control-plane expects {eif-hash}.eif)."
 }

@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let telemetry = Telemetry::init().context("init telemetry")?;
+    let telemetry = Telemetry::init();
     let config = HostConfig::from_env();
 
     let (catalog, artifacts, idempotency) = match config.store {

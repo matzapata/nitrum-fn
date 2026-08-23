@@ -1,22 +1,25 @@
 # Fargate management API (`nitrum-fn-api`). Enclave image is ./Dockerfile (`nitrum build`).
 # AOT compile lives in Dockerfile.publish-worker (musl). This image only stores .wasm and publishes SNS.
-# Fargate is X86_64 — build with `--platform linux/amd64 -f Dockerfile.api` (QEMU on Apple Silicon).
+# Published to GHCR by CI (`ghcr.io/matzapata/nitrum-fn/api`). Fargate is X86_64 —
+# build with `--platform linux/amd64 -f Dockerfile.api` (QEMU on Apple Silicon).
 FROM --platform=linux/amd64 rust:1.95-bookworm AS builder
 
 WORKDIR /build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends musl-tools \
-    && rm -rf /var/lib/apt/lists/* \
-    && rustup target add x86_64-unknown-linux-musl
+    && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 
+# rust-toolchain.toml makes rustup reinstall 1.95 (extra components). Add musl
+# on that toolchain, not the image default from an earlier layer.
 RUN --mount=type=cache,id=nitrum-fn-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=nitrum-fn-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=nitrum-fn-api-target,target=/build/target,sharing=locked \
-    cargo build --locked --release --target x86_64-unknown-linux-musl -p api --bin nitrum-fn-api \
+    rustup target add x86_64-unknown-linux-musl \
+    && cargo build --locked --release --target x86_64-unknown-linux-musl -p api --bin nitrum-fn-api \
     && mkdir -p /out \
     && cp /build/target/x86_64-unknown-linux-musl/release/nitrum-fn-api /out/nitrum-fn-api
 

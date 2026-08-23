@@ -14,6 +14,8 @@ use crate::error::HttpError;
 use crate::state::AppState;
 use crate::telemetry::{outcome_for_error, record_invoke};
 
+/// `/healthz` is provided by `catalog_router`, always merged alongside this
+/// router in `main.rs` — defining it here too would panic on `Router::merge`.
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/invoke/{name}", post(invoke))

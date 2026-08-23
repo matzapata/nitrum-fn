@@ -22,8 +22,14 @@ variable "retain" {
 
 variable "eif_s3_key" {
   type        = string
-  default     = "enclave.eif"
-  description = "S3 object key of the EIF file in the EIF bucket."
+  default     = ""
+  description = "S3 object key of the EIF. Empty (recommended) uses {eif_version_label}.eif, which is what the Nitrum control-plane downloads."
+}
+
+variable "eif_source_path" {
+  type        = string
+  default     = ""
+  description = "Local EIF path for Terraform to upload when enable_enclave is true. Empty uses <repo>/.nitrum/artifacts/<project_name>.eif."
 }
 
 variable "enable_enclave" {
@@ -56,22 +62,22 @@ variable "invoke_hostname" {
   description = "Optional FQDN for invoke (NLB alias). Empty skips the record. Requires hosted_zone_id. Default invoke URL is the NLB DNS name."
 }
 
-variable "api_image_tag" {
+variable "api_image" {
   type        = string
-  default     = "latest"
-  description = "ECR image tag for nitrum-fn-api."
+  default     = "ghcr.io/matzapata/nitrum-fn/api:latest"
+  description = "Full container image URI for nitrum-fn-api. Override for Docker Hub or another GHCR repo."
 }
 
 variable "api_desired_count" {
   type        = number
   default     = 1
-  description = "Fargate desired count. Push an image to ECR before the service can start."
+  description = "Fargate desired count. The image must exist in the registry before the service can start."
 }
 
-variable "worker_image_tag" {
+variable "worker_image" {
   type        = string
-  default     = "latest"
-  description = "ECR image tag for nitrum-fn-publish-worker."
+  default     = "ghcr.io/matzapata/nitrum-fn/publish-worker:latest"
+  description = "Full container image URI for nitrum-fn-publish-worker. Override for Docker Hub or another GHCR repo."
 }
 
 variable "worker_desired_count" {

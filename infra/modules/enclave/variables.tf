@@ -41,8 +41,13 @@ variable "eif_s3_bucket" {
 
 variable "eif_s3_key" {
   type        = string
-  default     = "enclave.eif"
-  description = "S3 object key of the EIF file."
+  default     = ""
+  description = "Unused for the object key (always {eif_version_label}.eif). Kept so callers can still pass a value."
+}
+
+variable "eif_source_path" {
+  type        = string
+  description = "Absolute or module-relative path to the local EIF from `nitrum build` (uploaded as {eif_version_label}.eif)."
 }
 
 variable "eif_version_label" {

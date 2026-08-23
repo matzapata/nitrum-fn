@@ -8,9 +8,9 @@ output "alb_dns_name" {
   value       = aws_lb.api.dns_name
 }
 
-output "ecr_repository_url" {
-  description = "ECR repository URL for nitrum-fn-api images"
-  value       = aws_ecr_repository.api.repository_url
+output "image" {
+  description = "Container image URI the API task pulls"
+  value       = var.image
 }
 
 output "ecs_cluster_name" {

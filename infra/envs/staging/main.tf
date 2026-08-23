@@ -9,26 +9,26 @@ module "store" {
 
   project_name = var.project_name
   retain       = var.retain
-  eif_s3_key   = var.eif_s3_key
+  eif_s3_key   = local.eif_s3_key
 }
 
 module "api" {
   source = "../../modules/api"
 
-  project_name          = var.project_name
-  vpc_id                = module.network.vpc_id
-  public_subnet_ids     = module.network.public_subnet_ids
-  private_subnet_ids    = module.network.private_subnet_ids
-  artifacts_bucket_name = module.store.artifacts_bucket_name
-  artifacts_bucket_arn  = module.store.artifacts_bucket_arn
+  project_name           = var.project_name
+  vpc_id                 = module.network.vpc_id
+  public_subnet_ids      = module.network.public_subnet_ids
+  private_subnet_ids     = module.network.private_subnet_ids
+  artifacts_bucket_name  = module.store.artifacts_bucket_name
+  artifacts_bucket_arn   = module.store.artifacts_bucket_arn
   catalog_table_name     = module.store.catalog_table_name
   catalog_table_arn      = module.store.catalog_table_arn
   idempotency_table_name = module.store.idempotency_table_name
   idempotency_table_arn  = module.store.idempotency_table_arn
-  publish_topic_arn     = module.store.publish_topic_arn
-  image_tag             = var.api_image_tag
-  desired_count         = var.api_desired_count
-  log_retention_in_days = var.log_retention_in_days
+  publish_topic_arn      = module.store.publish_topic_arn
+  image                  = var.api_image
+  desired_count          = var.api_desired_count
+  log_retention_in_days  = var.log_retention_in_days
 }
 
 module "worker" {
@@ -43,7 +43,7 @@ module "worker" {
   catalog_table_arn     = module.store.catalog_table_arn
   compile_queue_url     = module.store.compile_queue_url
   compile_queue_arn     = module.store.compile_queue_arn
-  image_tag             = var.worker_image_tag
+  image                 = var.worker_image
   desired_count         = var.worker_desired_count
   log_retention_in_days = var.log_retention_in_days
 }
@@ -60,6 +60,7 @@ module "enclave" {
   private_subnet_ids               = module.network.private_subnet_ids
   eif_s3_bucket                    = module.store.eif_bucket_name
   eif_s3_key                       = module.store.eif_s3_key
+  eif_source_path                  = local.eif_source_path
   eif_version_label                = var.eif_version_label
   eif_image_sha384                 = var.eif_image_sha384
   asg_min_size                     = var.asg_min_size
@@ -123,6 +124,13 @@ check "enclave_pcr0" {
   assert {
     condition     = !var.enable_enclave || var.eif_image_sha384 != ""
     error_message = "eif_image_sha384 is required when enable_enclave is true (PCR0 from nitro-cli describe-eif)."
+  }
+}
+
+check "eif_source" {
+  assert {
+    condition     = !var.enable_enclave || fileexists(local.eif_source_path)
+    error_message = "enable_enclave requires a local EIF. Run `nitrum build` (expected at .nitrum/artifacts/${var.project_name}.eif)."
   }
 }
 

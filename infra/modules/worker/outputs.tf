@@ -1,6 +1,6 @@
-output "ecr_repository_url" {
-  description = "ECR repository URL for nitrum-fn-publish-worker images"
-  value       = aws_ecr_repository.worker.repository_url
+output "image" {
+  description = "Container image URI the worker task pulls"
+  value       = var.image
 }
 
 output "ecs_cluster_name" {

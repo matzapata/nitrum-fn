@@ -9,8 +9,8 @@ infra/
   modules/
     network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs/SQS/SNS endpoints
     store/     # EIF S3, artifacts S3, catalog DDB, SNS+SQS, /env SSM
-    api/       # HTTP ALB, ECR, Fargate (ALB DNS; no custom hostname)
-    worker/    # ECR + Fargate publish-worker (SQS → AOT)
+    api/       # HTTP ALB, Fargate (ALB DNS; no custom hostname)
+    worker/    # Fargate publish-worker (SQS → AOT)
     enclave/   # NLB, ASG, KMS, Nitrum data-plane table (optional)
   envs/staging/
 ```
@@ -38,11 +38,13 @@ aws dynamodb create-table \
 ```bash
 cd infra/envs/staging
 cp backend.hcl.example backend.hcl
-# set bucket, dynamodb_table, region
+# set bucket, dynamodb_table, region (backend.hcl is gitignored)
 cp terraform.tfvars.example terraform.tfvars
 ```
 
 ## 1. Network + store + API + worker (no enclaves)
+
+Fargate pulls **public** images. Defaults are GHCR (`ghcr.io/matzapata/nitrum-fn/api:latest` and `…/publish-worker:latest`), published by CI on `main`. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry. Make GHCR packages public so ECS can pull without a PAT.
 
 ```bash
 cd infra/envs/staging
@@ -51,21 +53,7 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-Outputs you need: `ecr_repository_url`, `worker_ecr_repository_url`, `api_url`, `eif_bucket_name`, `artifacts_bucket_name`.
-
-Build and push the management API and publish-worker (Fargate stays unhealthy until images exist). Fargate is **x86_64** — always pass `--platform linux/amd64` (QEMU on Apple Silicon):
-
-```bash
-# from repo root; region/account from your AWS profile
-AWS_REGION=us-east-1
-ECR=$(terraform -chdir=infra/envs/staging output -raw ecr_repository_url)
-WORKER_ECR=$(terraform -chdir=infra/envs/staging output -raw worker_ecr_repository_url)
-aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%%/*}"
-docker build --platform linux/amd64 -f Dockerfile.api -t "$ECR:latest" .
-docker push "$ECR:latest"
-docker build --platform linux/amd64 -f Dockerfile.publish-worker -t "$WORKER_ECR:latest" .
-docker push "$WORKER_ECR:latest"
-```
+Outputs you need: `api_url`, `api_image`, `worker_image`, `eif_bucket_name`, `artifacts_bucket_name`.
 
 Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Publish (CLI polls until the worker upserts the catalog):
 
@@ -84,15 +72,8 @@ nitrum build
 
 `nitrum.toml` `[egress]` is a **whitelist** when `enabled = true`. KMS, SSM, DynamoDB, IMDS, and OTLP are implicit; **S3 is not** — the file already allowlists S3 hostnames so artifact fetches work.
 
-1. Upload to the EIF bucket (`terraform output eif_bucket_name`, key `enclave.eif` by default):
-
-```bash
-EIF_BUCKET=$(terraform -chdir=infra/envs/staging output -raw eif_bucket_name)
-aws s3 cp .nitrum/artifacts/nitrum-fn.eif "s3://$EIF_BUCKET/enclave.eif"
-```
-
-2. Take **PCR0** and **EIF hash (sha256)** from `nitrum build` (or `nitrum describe`).
-3. In `terraform.tfvars`:
+1. Take **PCR0** and **EIF hash (sha256)** from `nitrum build` (or `nitrum describe`).
+2. In `terraform.tfvars`:
 
 ```hcl
 enable_enclave    = true
@@ -100,7 +81,7 @@ eif_version_label = "<first 12 hex of EIF sha256>"
 eif_image_sha384  = "<PCR0 hex>"
 ```
 
-4. `terraform apply` — creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts.
+3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG does not launch until the object exists.
 
 SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_STORE`, `NITRUM_FN_S3_BUCKET`, and `NITRUM_FN_DDB_TABLE` so Nitrum can inject them into the enclave. The host does not need SNS/SQS in the enclave (publish is the Fargate API).
 
@@ -121,7 +102,7 @@ bash tests/e2e/cloud.sh
 
 ## Every enclave release
 
-Upload a new EIF, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. The launch template name changes and the ASG rolls.
+`nitrum build`, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. Terraform re-uploads the EIF; the launch template name changes and the ASG rolls.
 
 ## Layout vs trust
 

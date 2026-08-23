@@ -58,16 +58,15 @@ variable "publish_topic_arn" {
   description = "SNS topic ARN for publish-queued events."
 }
 
-variable "image_tag" {
+variable "image" {
   type        = string
-  default     = "latest"
-  description = "ECR image tag for nitrum-fn-api."
+  description = "Full container image URI for nitrum-fn-api (registry/repo:tag). Must exist and be pullable by Fargate (public GHCR/Docker Hub, or a registry ECS can authenticate to)."
 }
 
 variable "desired_count" {
   type        = number
   default     = 1
-  description = "Fargate desired count. Push an image to ECR before raising this above 0 on a fresh stack."
+  description = "Fargate desired count. The image must exist in the registry before the service can start."
 }
 
 variable "cpu" {

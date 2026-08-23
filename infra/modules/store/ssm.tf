@@ -1,3 +1,5 @@
+data "aws_region" "current" {}
+
 resource "aws_ssm_parameter" "store" {
   name        = "/nitrum/${var.project_name}/env/NITRUM_FN_STORE"
   type        = "String"
@@ -17,4 +19,18 @@ resource "aws_ssm_parameter" "ddb_table" {
   type        = "String"
   value       = aws_dynamodb_table.catalog.name
   description = "DynamoDB catalog table for nitrum-fn (fn_id + label)"
+}
+
+resource "aws_ssm_parameter" "ddb_idempotency_table" {
+  name        = "/nitrum/${var.project_name}/env/NITRUM_FN_DDB_IDEMPOTENCY_TABLE"
+  type        = "String"
+  value       = aws_dynamodb_table.idempotency.name
+  description = "DynamoDB publish idempotency table (not the derived {catalog}-idempotency name)"
+}
+
+resource "aws_ssm_parameter" "aws_region" {
+  name        = "/nitrum/${var.project_name}/env/AWS_REGION"
+  type        = "String"
+  value       = data.aws_region.current.name
+  description = "AWS region for the enclave host SDK (user process env is cleared except SSM + OTel)"
 }

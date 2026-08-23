@@ -105,3 +105,64 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y curl
       - name: E2E
         run: bash tests/e2e/invoke.sh
+
+  publish-images:
+    name: Publish images (GHCR)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [fmt, lint, test, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      API_IMAGE: ghcr.io/${{ github.repository }}/api
+      WORKER_IMAGE: ghcr.io/${{ github.repository }}/publish-worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Build and push publish-worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.publish-worker
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.WORKER_IMAGE }}:latest
+            ${{ env.WORKER_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=publish-worker
+          cache-to: type=gha,mode=max,scope=publish-worker
+      - name: Make packages public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          owner="${{ github.repository_owner }}"
+          name="${{ github.event.repository.name }}"
+          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
+            base="/orgs/${owner}/packages/container"
+          else
+            base="/user/packages/container"
+          fi
+          for pkg in "${name}%2Fapi" "${name}%2Fpublish-worker"; do
+            gh api --method PUT "${base}/${pkg}/visibility" -f visibility=public
+          done

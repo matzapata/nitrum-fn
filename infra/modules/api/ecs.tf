@@ -19,7 +19,7 @@ resource "aws_ecs_task_definition" "api" {
   container_definitions = jsonencode([
     {
       name      = local.container_name
-      image     = local.image
+      image     = var.image
       essential = true
       portMappings = [
         {

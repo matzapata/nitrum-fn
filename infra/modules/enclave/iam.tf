@@ -31,7 +31,7 @@ data "aws_iam_policy_document" "instance" {
     sid       = "ReadEifFromS3"
     effect    = "Allow"
     actions   = ["s3:GetObject"]
-    resources = ["arn:aws:s3:::${var.eif_s3_bucket}/${var.eif_s3_key}"]
+    resources = ["arn:aws:s3:::${var.eif_s3_bucket}/${local.eif_object_key}"]
   }
 
   statement {

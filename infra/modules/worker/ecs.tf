@@ -19,7 +19,7 @@ resource "aws_ecs_task_definition" "worker" {
   container_definitions = jsonencode([
     {
       name      = local.container_name
-      image     = local.image
+      image     = var.image
       essential = true
       environment = [
         { name = "NITRUM_FN_STORE", value = "aws" },

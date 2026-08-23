@@ -50,5 +50,5 @@ output "asg_name" {
 
 output "eif_s3_uri" {
   description = "S3 URI the control-plane uses to download the EIF at container startup"
-  value       = "s3://${var.eif_s3_bucket}/${var.eif_s3_key}"
+  value       = "s3://${var.eif_s3_bucket}/${local.eif_object_key}"
 }

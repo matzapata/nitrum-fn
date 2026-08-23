@@ -48,16 +48,15 @@ variable "compile_queue_arn" {
   description = "SQS queue ARN for compile jobs."
 }
 
-variable "image_tag" {
+variable "image" {
   type        = string
-  default     = "latest"
-  description = "ECR image tag for nitrum-fn-publish-worker."
+  description = "Full container image URI for nitrum-fn-publish-worker (registry/repo:tag). Must exist and be pullable by Fargate (public GHCR/Docker Hub, or a registry ECS can authenticate to)."
 }
 
 variable "desired_count" {
   type        = number
   default     = 1
-  description = "Fargate desired count for the publish worker."
+  description = "Fargate desired count for the publish worker. The image must exist in the registry before the service can start."
 }
 
 variable "cpu" {
