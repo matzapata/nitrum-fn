@@ -15,6 +15,6 @@ test:
 	cargo test --workspace --all-targets
 
 e2e:
-	bash tests/e2e/invoke.sh
+	bash tests/e2e/local.sh
 
 ci: fmt-check lint test

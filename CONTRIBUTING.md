@@ -16,13 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum/develop/scripts/in
 nitrum --help
 ```
 
-Local fmt/test/`invoke.sh` do not need `nitrum`. Staging e2e does. Do **not** use `nitrum cloud deploy` here — this repo’s Terraform owns the VPC, Fargate API, and optional enclave fleet. Use `nitrum build` (and `nitrum describe`) only.
+Local fmt/test/`local.sh` do not need `nitrum`. Staging e2e does. Do **not** use `nitrum cloud deploy` here — this repo’s Terraform owns the VPC, Fargate API, and optional enclave fleet. Use `nitrum build` (and `nitrum describe`) only.
 
 No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed in the enclave (`curl -k` against the NLB DNS). Leave `[tls_termination] acme = false` in `nitrum.toml`.
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/invoke.sh`. Match that locally:
+CI (`.github/workflows/ci.yml`) runs format, Clippy, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
 
 ```bash
 cargo fmt --all -- --check
@@ -32,10 +32,10 @@ NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
 NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
   cargo test --workspace --all-targets
-bash tests/e2e/invoke.sh
+bash tests/e2e/local.sh
 ```
 
-`invoke.sh` is **local only**: merged host + publish-worker + emulators, not the cloud split.
+`local.sh` is **local only**: merged host + publish-worker + emulators, not the cloud split.
 
 ## Local host
 

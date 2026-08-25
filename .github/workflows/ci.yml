@@ -104,7 +104,7 @@ jobs:
       - name: Install curl
         run: sudo apt-get update && sudo apt-get install -y curl
       - name: E2E
-        run: bash tests/e2e/invoke.sh
+        run: bash tests/e2e/local.sh
 
   publish-images:
     name: Publish images (GHCR)

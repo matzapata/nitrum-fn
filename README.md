@@ -96,7 +96,7 @@ cargo run -p cli -- publish ./examples/hello-world/.../hello_world.wasm --name h
 curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: application/json' -d '{}'
 ```
 
-`NITRUM_FN_STORE=fs` (default) is **seed + invoke only**: drop `.wasm` files in the seed dir and they compile inline on host boot. HTTP publish needs `NITRUM_FN_STORE=aws` plus `publish-worker` (shared DynamoDB catalog). End-to-end smoke: `bash tests/e2e/invoke.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
+`NITRUM_FN_STORE=fs` (default) is **seed + invoke only**: drop `.wasm` files in the seed dir and they compile inline on host boot. HTTP publish needs `NITRUM_FN_STORE=aws` plus `publish-worker` (shared DynamoDB catalog). End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Observability** uses Nitrum’s OTel path — not a collector in this repo. The host exports OTLP (**gRPC** by default). Leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset for stdout-only local runs.
 
