@@ -26,6 +26,8 @@ impl IntoResponse for HttpError {
             AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
                 StatusCode::BAD_REQUEST
             }
+            AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             AppError::Invoke(_) | AppError::Trap(_) | AppError::Storage(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -34,5 +36,31 @@ impl IntoResponse for HttpError {
             error: self.0.to_string(),
         });
         (status, body).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn timeout_maps_to_504() {
+        let res = HttpError(AppError::Timeout("epoch".into())).into_response();
+        assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+        let body = to_bytes(res.into_body(), 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn payload_too_large_maps_to_413() {
+        let res = HttpError(AppError::PayloadTooLarge("big".into())).into_response();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn trap_maps_to_500() {
+        let res = HttpError(AppError::Trap("unreachable".into())).into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

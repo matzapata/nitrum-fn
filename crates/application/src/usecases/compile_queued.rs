@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use domain::{ContentHash, FunctionId, PublishQueuedEvent, VersionLabel};
+use domain::{ContentHash, FunctionId, PublishQueuedEvent, VersionLabel, MAX_WASM_BYTES};
 use tracing::instrument;
 
 use crate::error::AppError;
@@ -40,6 +40,12 @@ impl CompileQueuedFunction {
             }
             Err(AppError::ArtifactMissing(_)) => {
                 let wasm = self.artifacts.get(&hash).await?;
+                if wasm.len() > MAX_WASM_BYTES {
+                    return Err(AppError::PayloadTooLarge(format!(
+                        "wasm {} bytes exceeds max {MAX_WASM_BYTES}",
+                        wasm.len()
+                    )));
+                }
                 let actual = ContentHash::from_bytes(&wasm);
                 if actual != hash {
                     return Err(AppError::HashMismatch {

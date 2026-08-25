@@ -31,4 +31,12 @@ pub enum AppError {
     /// Guest trapped while executing `invoke` (Wasmtime trap / panic / unreachable).
     #[error("guest trap: {0}")]
     Trap(String),
+
+    /// Guest hit the wall-clock invoke deadline (Wasmtime epoch interrupt).
+    #[error("invoke timed out: {0}")]
+    Timeout(String),
+
+    /// Request body, wasm artifact, or guest output exceeded a product limit.
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
 }

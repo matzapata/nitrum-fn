@@ -151,6 +151,8 @@ pub fn outcome_for_error(err: &AppError) -> &'static str {
     match err {
         AppError::NotFound(_) | AppError::ArtifactMissing(_) => "not_found",
         AppError::Trap(_) => "trap",
+        AppError::Timeout(_) => "timeout",
+        AppError::PayloadTooLarge(_) => "payload_too_large",
         _ => "error",
     }
 }

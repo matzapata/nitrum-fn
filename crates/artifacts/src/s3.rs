@@ -5,7 +5,7 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use domain::ContentHash;
+use domain::{ContentHash, MAX_COMPILED_BYTES, MAX_WASM_BYTES};
 
 fn is_missing_object(err: &SdkError<GetObjectError>) -> bool {
     match err {
@@ -43,7 +43,12 @@ impl S3ArtifactStore {
         format!("{}/{}.cwasm", self.prefix, hash.to_hex())
     }
 
-    async fn get_object(&self, key: &str, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
+    async fn get_object(
+        &self,
+        key: &str,
+        hash: &ContentHash,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AppError> {
         match self
             .client
             .get_object()
@@ -52,12 +57,35 @@ impl S3ArtifactStore {
             .send()
             .await
         {
-            Ok(out) => out
-                .body
-                .collect()
-                .await
-                .map(|b| b.to_vec())
-                .map_err(|e| AppError::Storage(e.to_string())),
+            Ok(out) => {
+                if let Some(len) = out.content_length() {
+                    if len < 0 {
+                        return Err(AppError::Storage(format!(
+                            "negative content-length for {key}"
+                        )));
+                    }
+                    if len as u64 > max_bytes as u64 {
+                        return Err(AppError::PayloadTooLarge(format!(
+                            "object {key} is {len} bytes (max {max_bytes})"
+                        )));
+                    }
+                }
+                out.body
+                    .collect()
+                    .await
+                    .map(|b| b.to_vec())
+                    .map_err(|e| AppError::Storage(e.to_string()))
+                    .and_then(|bytes| {
+                        if bytes.len() > max_bytes {
+                            Err(AppError::PayloadTooLarge(format!(
+                                "object {key} is {} bytes (max {max_bytes})",
+                                bytes.len()
+                            )))
+                        } else {
+                            Ok(bytes)
+                        }
+                    })
+            }
             Err(err) if is_missing_object(&err) => Err(AppError::ArtifactMissing(hash.to_hex())),
             Err(err) => Err(AppError::Storage(err.to_string())),
         }
@@ -85,15 +113,23 @@ impl ArtifactStore for S3ArtifactStore {
     }
 
     async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.get_object(&self.wasm_key(hash), hash).await
+        self.get_object(&self.wasm_key(hash), hash, MAX_WASM_BYTES)
+            .await
     }
 
     async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
+        if compiled.len() > MAX_COMPILED_BYTES {
+            return Err(AppError::PayloadTooLarge(format!(
+                "compiled {} bytes exceeds max {MAX_COMPILED_BYTES}",
+                compiled.len()
+            )));
+        }
         self.put_object(&self.cwasm_key(hash), compiled).await
     }
 
     async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.get_object(&self.cwasm_key(hash), hash).await
+        self.get_object(&self.cwasm_key(hash), hash, MAX_COMPILED_BYTES)
+            .await
     }
 }
 

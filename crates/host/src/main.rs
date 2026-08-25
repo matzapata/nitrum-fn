@@ -28,7 +28,7 @@ use aws_sdk_sqs::Client as SqsClient;
 use catalog::{
     DynamoDbCatalog, DynamoDbPublishIdempotency, FilesystemCatalog, FilesystemPublishIdempotency,
 };
-use domain::{FunctionId, PublishQueuedEvent};
+use domain::{FunctionId, PublishQueuedEvent, MAX_WASM_BYTES};
 use executor::WasmtimeRunner;
 use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
 use tracing::{info, warn};
@@ -352,6 +352,16 @@ async fn seed_dir(
         let wasm = tokio::fs::read(&path)
             .await
             .with_context(|| format!("read {}", path.display()))?;
+
+        if wasm.len() > MAX_WASM_BYTES {
+            warn!(
+                %name,
+                wasm_bytes = wasm.len(),
+                max = MAX_WASM_BYTES,
+                "skipping oversize seed wasm"
+            );
+            continue;
+        }
 
         let function = match FunctionId::new(name) {
             Ok(id) => id,

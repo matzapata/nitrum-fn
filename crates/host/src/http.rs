@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
-use domain::{FunctionId, InvokeRequest, VersionLabel};
+use domain::{FunctionId, InvokeRequest, VersionLabel, MAX_INVOKE_BODY_BYTES};
 use runtime::{decode_response, encode_request, Request as FnRequest};
 use tower_http::trace::TraceLayer;
 
@@ -19,6 +19,7 @@ use crate::telemetry::{outcome_for_error, record_invoke};
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/invoke/{name}", post(invoke))
+        .layer(DefaultBodyLimit::max(MAX_INVOKE_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -61,6 +62,14 @@ async fn invoke_inner(
             Some((k.as_str().to_string(), value))
         })
         .collect();
+
+    if body.len() > MAX_INVOKE_BODY_BYTES {
+        return Err(application::AppError::PayloadTooLarge(format!(
+            "invoke body {} bytes exceeds max {MAX_INVOKE_BODY_BYTES}",
+            body.len()
+        ))
+        .into());
+    }
 
     let fn_req = FnRequest::new("POST", path, fn_headers, body.to_vec());
     let payload = encode_request(&fn_req)

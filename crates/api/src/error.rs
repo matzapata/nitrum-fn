@@ -26,6 +26,8 @@ impl IntoResponse for HttpError {
             AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
                 StatusCode::BAD_REQUEST
             }
+            AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             AppError::Invoke(_) | AppError::Trap(_) | AppError::Storage(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use domain::{ContentHash, PublishQueuedEvent, PublishRequest, PublishResponse, VersionLabel};
+use domain::{
+    ContentHash, PublishQueuedEvent, PublishRequest, PublishResponse, VersionLabel, MAX_WASM_BYTES,
+};
 use tracing::instrument;
 
 use crate::error::AppError;
@@ -32,6 +34,12 @@ impl PublishFunction {
     pub async fn execute(&self, req: PublishRequest) -> Result<PublishResponse, AppError> {
         if req.wasm.is_empty() {
             return Err(AppError::Compile("empty wasm".into()));
+        }
+        if req.wasm.len() > MAX_WASM_BYTES {
+            return Err(AppError::PayloadTooLarge(format!(
+                "wasm {} bytes exceeds max {MAX_WASM_BYTES}",
+                req.wasm.len()
+            )));
         }
 
         let hash = ContentHash::from_bytes(&req.wasm);
@@ -251,6 +259,29 @@ mod tests {
             .await
             .expect_err("empty");
         assert!(matches!(err, AppError::Compile(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversize_wasm_without_put() {
+        let artifacts = Arc::new(MemArtifacts::new());
+        let bus = Arc::new(MemBus::new());
+        let publish = PublishFunction::new(
+            artifacts.clone(),
+            bus.clone(),
+            Arc::new(MemIdempotency::new()),
+        );
+        let wasm = vec![0u8; domain::MAX_WASM_BYTES + 1];
+        let err = publish
+            .execute(PublishRequest {
+                function: FunctionId::new("echo").unwrap(),
+                wasm,
+                idempotency_key: None,
+            })
+            .await
+            .expect_err("too large");
+        assert!(matches!(err, AppError::PayloadTooLarge(_)), "{err}");
+        assert!(artifacts.wasm.lock().unwrap().is_empty());
+        assert!(bus.events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

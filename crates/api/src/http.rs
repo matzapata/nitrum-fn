@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use domain::{FunctionId, IdempotencyKey, PublishRequest, VersionLabel};
+use domain::{FunctionId, IdempotencyKey, PublishRequest, VersionLabel, MAX_WASM_BYTES};
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
@@ -28,6 +28,7 @@ pub fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
 pub fn publish_router(usecase: Arc<PublishFunction>) -> Router {
     Router::new()
         .route("/functions/{name}", put(publish))
+        .layer(DefaultBodyLimit::max(MAX_WASM_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(PublishState { publish: usecase })
 }
@@ -243,5 +244,20 @@ mod tests {
             .unwrap();
         assert_eq!(second.status(), StatusCode::ACCEPTED);
         assert_eq!(bus.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn body_over_default_limit_is_413() {
+        let (app, bus) = publish_app();
+        let oversize = vec![0u8; domain::MAX_WASM_BYTES + 1];
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/functions/echo")
+            .header("content-type", "application/wasm")
+            .body(Body::from(oversize))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(bus.events.lock().unwrap().is_empty());
     }
 }
