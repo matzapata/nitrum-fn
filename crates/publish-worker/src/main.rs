@@ -17,7 +17,7 @@ use aws_sdk_sqs::Client as SqsClient;
 use catalog::DynamoDbCatalog;
 use domain::PublishQueuedEvent;
 use executor::WasmtimeRunner;
-use messaging::{ensure_queue, SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
+use messaging::{SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
 use tracing::{error, info, warn};
 
 use crate::config::WorkerConfig;
@@ -49,12 +49,6 @@ async fn main() -> Result<()> {
     let compile = Arc::new(CompileQueuedFunction::new(catalog, artifacts, runner));
 
     let sqs = build_sqs_client(config.sqs_endpoint.as_deref()).await?;
-    if config.sqs_create_queue {
-        ensure_queue(&sqs, &queue_url)
-            .await
-            .context("ensure SQS queue")?;
-        info!(%queue_url, "SQS queue ready");
-    }
     let queue: Arc<dyn CompileQueue> =
         Arc::new(SqsCompileConsumer::new(sqs, queue_url.clone()).with_wait_seconds(20));
 

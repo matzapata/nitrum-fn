@@ -6,6 +6,7 @@ How to develop, test, and run a staging e2e. Product context lives in [`README.m
 
 - Rust **1.95** (`rust-toolchain.toml`; rustup installs it)
 - Docker (Compose for local S3/DynamoDB; Buildx/QEMU on Apple Silicon for `linux/amd64` images)
+- AWS CLI (create bucket/tables/queue against Floci + DynamoDB Local; Terraform owns cloud)
 - `wasm32-unknown-unknown` for guest examples: `rustup target add wasm32-unknown-unknown`
 - **[Nitrum CLI](https://github.com/matzapata/nitrum)** for EIF build (`nitrum build`). Staging also needs AWS credentials, Terraform ≥ 1.5, and a state backend (see [infra README](infra/README.md#prerequisites-once-per-account)).
 
@@ -40,20 +41,36 @@ bash tests/e2e/local.sh
 
 ## Local host
 
-Publish is async: the host enqueues to Floci **SQS**; **publish-worker** AOT-compiles. Start emulators (Floci + DynamoDB Local), then worker + host:
+Publish is async: the host enqueues to Floci **SQS**; **publish-worker** AOT-compiles. Start emulators (Floci + DynamoDB Local), create the bucket/tables/queue, then worker + host:
 
 ```bash
 docker compose up -d
 
+export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://nitrum-fn
+aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
+  --table-name nitrum-fn-catalog \
+  --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
+  --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
+aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
+  --table-name nitrum-fn-catalog-idempotency \
+  --attribute-definitions AttributeName=idempotency_key,AttributeType=S \
+  --key-schema AttributeName=idempotency_key,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
+  --table-name nitrum-fn-catalog-idempotency \
+  --time-to-live-specification Enabled=true,AttributeName=expires_at
+aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
+  --queue-name nitrum-fn-compile \
+  --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
+
 export NITRUM_FN_S3_BUCKET=nitrum-fn \
   NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_S3_CREATE_BUCKET=true \
   NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
   NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
-  NITRUM_FN_DDB_CREATE_TABLE=true \
   NITRUM_FN_SQS_QUEUE_URL=http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
   NITRUM_FN_SQS_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_SQS_CREATE_QUEUE=true \
   AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 
 cargo run -p publish-worker &
@@ -86,7 +103,7 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can publish here (CLI polls until the worker catalogs the function); invoke needs the enclave. If you retag `:latest` without changing the image URI, force a new ECS deployment:
+Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can deploy here (CLI polls until the worker catalogs the function); invoke needs the enclave. If you retag `:latest` without changing the image URI, force a new ECS deployment:
 
 ```bash
 aws ecs update-service --cluster nitrum-fn-api --service nitrum-fn-api --force-new-deployment
@@ -129,7 +146,7 @@ export NITRUM_FN_INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw i
 bash tests/e2e/cloud.sh
 ```
 
-That publishes `hello-world` to the ALB and `POST /invoke/hello-world` on the NLB (`curl -k`). Success body: `{"message":"Hello, world!"}`. On failure the script prints both URLs; check ECS (API) or ASG / control-plane logs (enclave).
+That deploys `hello-world` to the ALB and `POST /invoke/hello-world` on the NLB (`curl -k`). Success body: `{"message":"Hello, world!"}`. On failure the script prints both URLs; check ECS (API) or ASG / control-plane logs (enclave).
 
 This job is **not** in GitHub Actions.
 

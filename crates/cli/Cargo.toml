@@ -3,7 +3,7 @@ name = "cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CLI for publishing functions to a nitrum-fn host"
+description = "CLI for deploying functions to a nitrum-fn host"
 
 [[bin]]
 name = "nitrum-fn"

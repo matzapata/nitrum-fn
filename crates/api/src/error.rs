@@ -48,12 +48,14 @@ mod tests {
     use axum::body::to_bytes;
 
     #[tokio::test]
-    async fn storage_does_not_leak_internals() {
+    async fn does_not_leak_internals() {
         let res =
             HttpError(AppError::Storage("AccessDeniedException secret".into())).into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
         let body = to_bytes(res.into_body(), 1024).await.unwrap();
         let text = String::from_utf8_lossy(&body);
+
         assert!(text.contains("internal error"), "{text}");
         assert!(!text.contains("AccessDeniedException"), "{text}");
     }

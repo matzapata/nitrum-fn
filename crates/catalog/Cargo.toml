@@ -9,7 +9,6 @@ application = { workspace = true }
 domain = { workspace = true }
 async-trait = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
 aws-config = { workspace = true }

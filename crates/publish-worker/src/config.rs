@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 
+/// Bucket, table, and queue must already exist (Terraform in cloud; AWS CLI against emulators locally).
 pub struct WorkerConfig {
     pub s3_bucket: String,
     pub s3_endpoint: Option<String>,
@@ -7,7 +8,6 @@ pub struct WorkerConfig {
     pub ddb_endpoint: Option<String>,
     pub sqs_queue_url: String,
     pub sqs_endpoint: Option<String>,
-    pub sqs_create_queue: bool,
 }
 
 impl WorkerConfig {
@@ -20,7 +20,6 @@ impl WorkerConfig {
             ddb_endpoint: env_opt("NITRUM_FN_DDB_ENDPOINT")?.filter(|s| !s.is_empty()),
             sqs_queue_url: require_env("NITRUM_FN_SQS_QUEUE_URL")?,
             sqs_endpoint: env_opt("NITRUM_FN_SQS_ENDPOINT")?.filter(|s| !s.is_empty()),
-            sqs_create_queue: parse_flag("NITRUM_FN_SQS_CREATE_QUEUE")?,
         })
     }
 }
@@ -50,21 +49,6 @@ fn reject_legacy_store() -> Result<()> {
     }
 }
 
-fn parse_flag(name: &str) -> Result<bool> {
-    parse_flag_value(name, env_opt(name)?.as_deref())
-}
-
-fn parse_flag_value(name: &str, raw: Option<&str>) -> Result<bool> {
-    match raw {
-        None | Some("") => Ok(false),
-        Some(s) => match s.to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" => Ok(true),
-            "0" | "false" | "no" => Ok(false),
-            other => bail!("invalid {name}={other}; expected true or false"),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,12 +69,5 @@ mod tests {
             }
             Some(s) => bail!("invalid NITRUM_FN_STORE={s}; store is always AWS"),
         }
-    }
-
-    #[test]
-    fn rejects_invalid_flag() {
-        assert!(parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("maybe")).is_err());
-        assert!(!parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("no")).unwrap());
-        assert!(parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("yes")).unwrap());
     }
 }

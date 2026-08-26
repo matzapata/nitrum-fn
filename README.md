@@ -13,7 +13,7 @@ Develop, test, and run staging e2e: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 - **Fast path inside a long-lived enclave.** Scale by WASM instances, not by booting enclaves. In-memory Wasmtime `Module` and `Instance` caches absorb the cheap work (compile / instantiate). Enclave boot stays the expensive step and is treated as fleet capacity, not per-request.
 - **Content-hash catalog.** Publish stores `.wasm` and queues AOT; the worker writes musl `.cwasm` and upserts the catalog. Invoke resolves a version label to that hash and deserializes the precompiled module (load-only).
 - **Function SDK.** Guest code uses `Request` / `Response` runtime compiled *into* the `.wasm`, not into the host.
-- **CLI-first.** Publish and invoke are machine-native. No signup portal required for v1.
+- **CLI-first.** Deploy and invoke are machine-native. No signup portal required for v1.
 - **Observability before UI.** Invoke count, latency, traps, cold vs warm, and later 402/settle rates go through Nitrum’s OTel path (CloudWatch / Grafana).
 - **Pay-per-invoke (planned).** [x402](https://www.x402.org/) gated **inside** the enclave after TLS — `402 Payment Required`, then retry with a payment proof. Facilitators see price metadata, never the body.
 - **Platform AOT precompile (planned).** A platform-owned pipeline derives signed, hash-keyed artifacts from user `.wasm` so new workers deserialize instead of Cranelift-compiling. Users never upload native blobs.
@@ -27,7 +27,7 @@ Nitrum is the enclave platform. `nitrum-fn` is the FaaS product on top of it.
 |---|---|
 | EIF build, control-plane, data-plane TLS/ACME | WASM host (`/invoke`, module/instance cache) |
 | Attestation, KMS DEK, egress, OTel plumbing | Function catalog, artifact store |
-| `nitrum cloud deploy` / ASG / NLB | Publish CLI, later x402 and pricing metadata |
+| `nitrum cloud deploy` / ASG / NLB | Deploy CLI, later x402 and pricing metadata |
 | Optional later: platform hooks | Optional later: React dashboard, AOT build workers |
 
 **Why a separate repo:** independent release cadence (avoid PCR0 churn on every host tweak), a clear product story, and room for CLI / catalog / payments without bloating the enclave toolkit.
@@ -76,22 +76,39 @@ Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.
 # 1. Start Floci (:4566 S3+SQS) and DynamoDB Local (:8000)
 docker compose up -d
 
-# 2. Run publish-worker + host against the emulators
+# 2. Create the bucket, tables, and queue (same shape as Terraform)
+export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://nitrum-fn
+aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
+  --table-name nitrum-fn-catalog \
+  --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
+  --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
+aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
+  --table-name nitrum-fn-catalog-idempotency \
+  --attribute-definitions AttributeName=idempotency_key,AttributeType=S \
+  --key-schema AttributeName=idempotency_key,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
+  --table-name nitrum-fn-catalog-idempotency \
+  --time-to-live-specification Enabled=true,AttributeName=expires_at
+aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
+  --queue-name nitrum-fn-compile \
+  --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
+
+# 3. Run publish-worker + host against the emulators
 export NITRUM_FN_S3_BUCKET=nitrum-fn \
   NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_S3_CREATE_BUCKET=true \
   NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
   NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
-  NITRUM_FN_DDB_CREATE_TABLE=true \
   NITRUM_FN_SQS_QUEUE_URL=http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
   NITRUM_FN_SQS_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_SQS_CREATE_QUEUE=true \
   AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 cargo run -p publish-worker &
 cargo run -p host
 
-# 3. Publish + invoke (CLI polls until the worker catalogs the function)
-cargo run -p cli -- publish ./examples/hello-world/.../hello_world.wasm --name hello-world
+# 4. Deploy + invoke (CLI polls until the worker catalogs the function)
+cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
 curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: application/json' -d '{}'
 ```
 
@@ -111,18 +128,18 @@ Each step is additive. Do not add a coordinator or gateway that terminates calle
 
 | Stage | What ships | When |
 |---|---|---|
-| **1. Shared ingress** | WASM host, `/invoke`, catalog, artifacts, SNS→SQS AOT worker, publish CLI, OTel metrics | Now — validate the contract on Nitrum |
+| **1. Shared ingress** | WASM host, `/invoke`, catalog, artifacts, SNS→SQS AOT worker, deploy CLI, OTel metrics | Now — validate the contract on Nitrum |
 | **2. x402 pay-per-invoke** | Payment gate inside the enclave after TLS; catalog holds price only; agents/scripts as callers | When monetization is the next product goal |
 | **3. Platform precompile** | Extra SNS subscribers (signed artifacts, multi-target AOT) on the same publish topic | When product needs more than one compile consumer |
 | **4. Thin dashboard** | React (or similar) for browse / price / usage | When humans, not agents, need a console |
 
 ```text
-# Stage 1 — publish and call
-fn publish ./echo.wasm --name echo
+# Stage 1 — deploy and call
+fn deploy ./echo.wasm --name echo
 curl -X POST https://fn.example.com/invoke/echo -d '...'
 
 # Stage 2 — same call, machine-native payment
-fn publish ./echo.wasm --name echo --price 0.01
+fn deploy ./echo.wasm --name echo --price 0.01
 curl -X POST https://fn.example.com/invoke/echo -d '...'
 → 402 + PAYMENT-REQUIRED
 # client pays, retries with PAYMENT-SIGNATURE

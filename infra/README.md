@@ -55,10 +55,10 @@ terraform apply
 
 Outputs you need: `api_url`, `api_image`, `worker_image`, `eif_bucket_name`, `artifacts_bucket_name`.
 
-Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Publish (CLI polls until the worker upserts the catalog):
+Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Deploy (CLI polls until the worker upserts the catalog):
 
 ```bash
-cargo run -p cli -- publish ./path/to/fn.wasm --name hello-world --url "$(terraform -chdir=infra/envs/staging output -raw api_url)"
+cargo run -p cli -- deploy ./path/to/fn.wasm --name hello-world --url "$(terraform -chdir=infra/envs/staging output -raw api_url)"
 ```
 
 ## 2. Enclave fleet (invoke)

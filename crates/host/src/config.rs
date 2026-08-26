@@ -1,18 +1,16 @@
 use anyhow::{bail, Context, Result};
 
+/// Bucket, tables, and queues must already exist (Terraform in cloud; AWS CLI against emulators locally).
 pub struct HostConfig {
     pub port: u16,
     pub s3_bucket: String,
     pub s3_endpoint: Option<String>,
-    pub s3_create_bucket: bool,
     pub ddb_table: String,
     pub ddb_endpoint: Option<String>,
-    pub ddb_create_table: bool,
     pub ddb_idempotency_table: String,
     pub sns_topic_arn: Option<String>,
     pub sqs_queue_url: Option<String>,
     pub sqs_endpoint: Option<String>,
-    pub sqs_create_queue: bool,
 }
 
 impl HostConfig {
@@ -27,15 +25,12 @@ impl HostConfig {
             port,
             s3_bucket: require_env("NITRUM_FN_S3_BUCKET")?,
             s3_endpoint: env_opt("NITRUM_FN_S3_ENDPOINT")?.filter(|s| !s.is_empty()),
-            s3_create_bucket: parse_flag("NITRUM_FN_S3_CREATE_BUCKET")?,
             ddb_table,
             ddb_endpoint: env_opt("NITRUM_FN_DDB_ENDPOINT")?.filter(|s| !s.is_empty()),
-            ddb_create_table: parse_flag("NITRUM_FN_DDB_CREATE_TABLE")?,
             ddb_idempotency_table,
             sns_topic_arn: env_opt("NITRUM_FN_SNS_TOPIC_ARN")?.filter(|s| !s.is_empty()),
             sqs_queue_url: env_opt("NITRUM_FN_SQS_QUEUE_URL")?.filter(|s| !s.is_empty()),
             sqs_endpoint: env_opt("NITRUM_FN_SQS_ENDPOINT")?.filter(|s| !s.is_empty()),
-            sqs_create_queue: parse_flag("NITRUM_FN_SQS_CREATE_QUEUE")?,
         })
     }
 }
@@ -74,21 +69,6 @@ fn parse_port(raw: Option<&str>) -> Result<u16> {
     }
 }
 
-fn parse_flag(name: &str) -> Result<bool> {
-    parse_flag_value(name, env_opt(name)?.as_deref())
-}
-
-fn parse_flag_value(name: &str, raw: Option<&str>) -> Result<bool> {
-    match raw {
-        None | Some("") => Ok(false),
-        Some(s) => match s.to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" => Ok(true),
-            "0" | "false" | "no" => Ok(false),
-            other => bail!("invalid {name}={other}; expected true or false"),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,12 +95,5 @@ mod tests {
             }
             Some(s) => bail!("invalid NITRUM_FN_STORE={s}; store is always AWS"),
         }
-    }
-
-    #[test]
-    fn rejects_invalid_flag() {
-        assert!(parse_flag_value("NITRUM_FN_S3_CREATE_BUCKET", Some("maybe")).is_err());
-        assert!(!parse_flag_value("NITRUM_FN_S3_CREATE_BUCKET", Some("false")).unwrap());
-        assert!(parse_flag_value("NITRUM_FN_S3_CREATE_BUCKET", Some("1")).unwrap());
     }
 }

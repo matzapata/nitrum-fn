@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cloud e2e: CLI publish to the HTTP ALB, invoke through the NLB (self-signed enclave TLS).
+# Cloud e2e: CLI deploy to the HTTP ALB, invoke through the NLB (self-signed enclave TLS).
 # Requires a deployed staging stack with enable_enclave = true.
 #
 #   export NITRUM_FN_API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
@@ -47,10 +47,10 @@ done
 [[ "$ready" -eq 1 ]] || fail "API healthz timeout. Check ECS service ${API_URL}"
 pass "API healthy"
 
-echo "==> CLI publish"
-cargo run -p cli --quiet -- publish "$WASM_SRC" --name "$NAME" --url "$API_URL" \
-  || fail "publish failed (ALB=${API_URL})"
-pass "published ${NAME}"
+echo "==> CLI deploy"
+cargo run -p cli --quiet -- deploy "$WASM_SRC" --name "$NAME" --url "$API_URL" \
+  || fail "deploy failed (ALB=${API_URL})"
+pass "deployed ${NAME}"
 
 echo "==> GET /functions/${NAME}"
 meta="$(curl -sf "${API_URL}/functions/${NAME}")" \
@@ -71,7 +71,7 @@ done
 [[ "$ready" -eq 1 ]] || fail "enclave not ready at ${INVOKE_URL}. Check ASG / control-plane logs; NLB DNS=${INVOKE_URL}"
 pass "enclave reachable"
 
-echo "==> invoke after publish"
+echo "==> invoke after deploy"
 headers="$(mktemp)"
 body="$(curl -skS -D "$headers" -X POST \
   "${INVOKE_URL}/invoke/${NAME}" \
@@ -80,7 +80,7 @@ body="$(curl -skS -D "$headers" -X POST \
 
 grep -qi '^HTTP/.* 200' "$headers" || fail "status not 200 ($(head -1 "$headers")); body=${body}"
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
-pass "invoke after publish"
+pass "invoke after deploy"
 
 echo "==> unknown function → 404"
 code="$(curl -skS -o /dev/null -w '%{http_code}' -X POST \

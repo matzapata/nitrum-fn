@@ -9,9 +9,6 @@ use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
 use application::PublishFunction;
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
-use aws_sdk_dynamodb::types::{
-    AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType, TableStatus,
-};
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
@@ -19,7 +16,7 @@ use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
 use aws_sdk_sqs::Client as SqsClient;
 use catalog::{DynamoDbCatalog, DynamoDbPublishIdempotency};
-use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
+use messaging::{SnsPublishBus, SqsPublishBus};
 use tracing::info;
 
 use crate::config::ApiConfig;
@@ -37,15 +34,6 @@ async fn main() -> Result<()> {
 
     let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
     let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
-    if config.s3_create_bucket {
-        ensure_bucket(&s3, &config.s3_bucket).await?;
-    }
-    if config.ddb_create_table {
-        ensure_table(&ddb, &config.ddb_table).await?;
-        DynamoDbPublishIdempotency::ensure_table(&ddb, &config.ddb_idempotency_table)
-            .await
-            .context("ensure idempotency table")?;
-    }
     let catalog: Arc<dyn FunctionCatalog> =
         Arc::new(DynamoDbCatalog::new(ddb.clone(), config.ddb_table.clone()));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
@@ -105,12 +93,6 @@ async fn build_publish_bus(config: &ApiConfig) -> Result<Arc<dyn PublishBus>> {
         .clone()
         .context("set NITRUM_FN_SNS_TOPIC_ARN or NITRUM_FN_SQS_QUEUE_URL")?;
     let client = build_sqs_client(config.sqs_endpoint.as_deref()).await?;
-    if config.sqs_create_queue {
-        ensure_queue(&client, &queue_url)
-            .await
-            .context("ensure SQS queue")?;
-        info!(%queue_url, "SQS queue ready");
-    }
     info!(%queue_url, endpoint = ?config.sqs_endpoint, "publish bus: SQS direct");
     Ok(Arc::new(SqsPublishBus::new(client, queue_url)))
 }
@@ -152,95 +134,6 @@ async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
         builder = builder.endpoint_url(url);
     }
     Ok(DdbClient::from_conf(builder.build()))
-}
-
-async fn ensure_bucket(client: &S3Client, bucket: &str) -> Result<()> {
-    match client.head_bucket().bucket(bucket).send().await {
-        Ok(_) => {
-            info!(%bucket, "S3 bucket already exists");
-            Ok(())
-        }
-        Err(_) => {
-            client
-                .create_bucket()
-                .bucket(bucket)
-                .send()
-                .await
-                .with_context(|| format!("create S3 bucket {bucket}"))?;
-            info!(%bucket, "created S3 bucket");
-            Ok(())
-        }
-    }
-}
-
-async fn ensure_table(client: &DdbClient, table: &str) -> Result<()> {
-    if client
-        .describe_table()
-        .table_name(table)
-        .send()
-        .await
-        .is_ok()
-    {
-        info!(%table, "DynamoDB table already exists");
-        return wait_table_active(client, table).await;
-    }
-
-    client
-        .create_table()
-        .table_name(table)
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("fn_id")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("fn_id attribute definition")?,
-        )
-        .attribute_definitions(
-            AttributeDefinition::builder()
-                .attribute_name("label")
-                .attribute_type(ScalarAttributeType::S)
-                .build()
-                .context("label attribute definition")?,
-        )
-        .key_schema(
-            KeySchemaElement::builder()
-                .attribute_name("fn_id")
-                .key_type(KeyType::Hash)
-                .build()
-                .context("fn_id key schema")?,
-        )
-        .key_schema(
-            KeySchemaElement::builder()
-                .attribute_name("label")
-                .key_type(KeyType::Range)
-                .build()
-                .context("label key schema")?,
-        )
-        .billing_mode(BillingMode::PayPerRequest)
-        .send()
-        .await
-        .with_context(|| format!("create DynamoDB table {table}"))?;
-    info!(%table, "created DynamoDB table");
-    wait_table_active(client, table).await
-}
-
-async fn wait_table_active(client: &DdbClient, table: &str) -> Result<()> {
-    for _ in 0..50 {
-        let desc = client
-            .describe_table()
-            .table_name(table)
-            .send()
-            .await
-            .with_context(|| format!("describe DynamoDB table {table}"))?;
-        if matches!(
-            desc.table().and_then(|t| t.table_status()),
-            Some(&TableStatus::Active)
-        ) {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-    anyhow::bail!("DynamoDB table {table} did not become ACTIVE")
 }
 
 async fn shutdown_signal() {

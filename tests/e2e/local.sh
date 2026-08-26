@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end: Floci (S3+SQS) + DynamoDB Local → host + publish-worker → CLI publish → invoke.
+# End-to-end: Floci (S3+SQS) + DynamoDB Local → host + publish-worker → CLI deploy → invoke.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -58,17 +58,43 @@ wait_tcp() {
 common_env() {
   export NITRUM_FN_S3_BUCKET="$BUCKET" \
     NITRUM_FN_S3_ENDPOINT="$FLOCI_URL" \
-    NITRUM_FN_S3_CREATE_BUCKET=true \
     NITRUM_FN_DDB_TABLE="$TABLE" \
     NITRUM_FN_DDB_ENDPOINT="$DDB_URL" \
-    NITRUM_FN_DDB_CREATE_TABLE=true \
     NITRUM_FN_SQS_QUEUE_URL="$SQS_QUEUE_URL" \
     NITRUM_FN_SQS_ENDPOINT="$SQS_ENDPOINT" \
-    NITRUM_FN_SQS_CREATE_QUEUE=true \
     AWS_REGION=us-east-1 \
     AWS_DEFAULT_REGION=us-east-1 \
     AWS_ACCESS_KEY_ID=test \
     AWS_SECRET_ACCESS_KEY=test
+}
+
+provision_store() {
+  command -v aws >/dev/null || fail "aws CLI is required to create Floci/DynamoDB Local resources"
+  local queue_name
+  queue_name="$(basename "${SQS_QUEUE_URL%/}")"
+
+  aws --endpoint-url "$FLOCI_URL" s3 mb "s3://$BUCKET" >/dev/null
+
+  aws --endpoint-url "$DDB_URL" dynamodb create-table \
+    --table-name "$TABLE" \
+    --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
+    --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
+    --billing-mode PAY_PER_REQUEST >/dev/null
+  aws --endpoint-url "$DDB_URL" dynamodb wait table-exists --table-name "$TABLE"
+
+  aws --endpoint-url "$DDB_URL" dynamodb create-table \
+    --table-name "${TABLE}-idempotency" \
+    --attribute-definitions AttributeName=idempotency_key,AttributeType=S \
+    --key-schema AttributeName=idempotency_key,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST >/dev/null
+  aws --endpoint-url "$DDB_URL" dynamodb wait table-exists --table-name "${TABLE}-idempotency"
+  aws --endpoint-url "$DDB_URL" dynamodb update-time-to-live \
+    --table-name "${TABLE}-idempotency" \
+    --time-to-live-specification Enabled=true,AttributeName=expires_at >/dev/null
+
+  aws --endpoint-url "$SQS_ENDPOINT" sqs create-queue \
+    --queue-name "$queue_name" \
+    --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20 >/dev/null
 }
 
 echo "==> prepare data dir"
@@ -83,6 +109,9 @@ wait_tcp 127.0.0.1 8000 "DynamoDB Local"
 pass "emulators up"
 
 common_env
+echo "==> provision S3 bucket, DynamoDB tables, SQS queue"
+provision_store
+pass "store ready"
 
 echo "==> start publish-worker (SQS → AOT)"
 cargo run -p publish-worker >"$WORKER_LOG" 2>&1 &
@@ -121,10 +150,10 @@ cargo build --manifest-path "$EXAMPLE/Cargo.toml" --target "$TARGET" --release
 [[ -f "$WASM_SRC" ]] || fail "wasm missing at $WASM_SRC"
 pass "wasm built"
 
-echo "==> CLI publish (queues AOT; polls until ready)"
-cargo run -p cli --quiet -- publish "$WASM_SRC" --name hello-world --url "$URL" \
-  || { cat "$HOST_LOG" >&2 || true; cat "$WORKER_LOG" >&2 || true; fail "publish failed"; }
-pass "published hello-world"
+echo "==> CLI deploy (queues AOT; polls until ready)"
+cargo run -p cli --quiet -- deploy "$WASM_SRC" --name hello-world --url "$URL" \
+  || { cat "$HOST_LOG" >&2 || true; cat "$WORKER_LOG" >&2 || true; fail "deploy failed"; }
+pass "deployed hello-world"
 
 echo "==> GET /functions/hello-world"
 meta="$(curl -sf "${URL}/functions/hello-world")" \
@@ -132,7 +161,7 @@ meta="$(curl -sf "${URL}/functions/hello-world")" \
 echo "$meta" | grep -q '"name":"hello-world"' || fail "metadata name: $meta"
 pass "function metadata"
 
-echo "==> invoke after publish"
+echo "==> invoke after deploy"
 headers="$(mktemp)"
 body="$(curl -sS -D "$headers" -X POST \
   "${URL}/invoke/hello-world" \
@@ -141,7 +170,7 @@ body="$(curl -sS -D "$headers" -X POST \
 
 grep -qi '^HTTP/.* 200' "$headers" || fail "status not 200 ($(head -1 "$headers"))"
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
-pass "invoke after publish"
+pass "invoke after deploy"
 
 echo "==> unknown function → 404"
 code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \

@@ -5,10 +5,7 @@ use application::ports::{
     evaluate_claim, IdempotencyClaim, IdempotencyRecord, IdempotencyStatus, PublishIdempotency,
 };
 use async_trait::async_trait;
-use aws_sdk_dynamodb::types::{
-    AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
-    ScalarAttributeType, TableStatus, TimeToLiveSpecification, TimeToLiveStatus,
-};
+use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client;
 use domain::{ContentHash, FunctionId, IdempotencyKey};
 
@@ -35,44 +32,6 @@ impl DynamoDbPublishIdempotency {
             client,
             table: table.into(),
         }
-    }
-
-    pub async fn ensure_table(client: &Client, table: &str) -> Result<(), AppError> {
-        if client
-            .describe_table()
-            .table_name(table)
-            .send()
-            .await
-            .is_ok()
-        {
-            wait_table_active(client, table).await?;
-            return enable_ttl(client, table).await;
-        }
-
-        client
-            .create_table()
-            .table_name(table)
-            .attribute_definitions(
-                AttributeDefinition::builder()
-                    .attribute_name(ATTR_KEY)
-                    .attribute_type(ScalarAttributeType::S)
-                    .build()
-                    .map_err(|e| AppError::Storage(e.to_string()))?,
-            )
-            .key_schema(
-                KeySchemaElement::builder()
-                    .attribute_name(ATTR_KEY)
-                    .key_type(KeyType::Hash)
-                    .build()
-                    .map_err(|e| AppError::Storage(e.to_string()))?,
-            )
-            .billing_mode(BillingMode::PayPerRequest)
-            .send()
-            .await
-            .map_err(|e| AppError::Storage(e.to_string()))?;
-
-        wait_table_active(client, table).await?;
-        enable_ttl(client, table).await
     }
 
     async fn load(
@@ -147,58 +106,6 @@ impl DynamoDbPublishIdempotency {
             Err(err) => Err(AppError::Storage(err.to_string())),
         }
     }
-}
-
-async fn wait_table_active(client: &Client, table: &str) -> Result<(), AppError> {
-    for _ in 0..50 {
-        let desc = client
-            .describe_table()
-            .table_name(table)
-            .send()
-            .await
-            .map_err(|e| AppError::Storage(e.to_string()))?;
-        if matches!(
-            desc.table().and_then(|t| t.table_status()),
-            Some(&TableStatus::Active)
-        ) {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-    Err(AppError::Storage(format!(
-        "DynamoDB table {table} did not become ACTIVE"
-    )))
-}
-
-async fn enable_ttl(client: &Client, table: &str) -> Result<(), AppError> {
-    let desc = client
-        .describe_time_to_live()
-        .table_name(table)
-        .send()
-        .await
-        .map_err(|e| AppError::Storage(e.to_string()))?;
-    if matches!(
-        desc.time_to_live_description()
-            .and_then(|d| d.time_to_live_status()),
-        Some(&TimeToLiveStatus::Enabled) | Some(&TimeToLiveStatus::Enabling)
-    ) {
-        return Ok(());
-    }
-
-    client
-        .update_time_to_live()
-        .table_name(table)
-        .time_to_live_specification(
-            TimeToLiveSpecification::builder()
-                .enabled(true)
-                .attribute_name(ATTR_EXPIRES_AT)
-                .build()
-                .map_err(|e| AppError::Storage(e.to_string()))?,
-        )
-        .send()
-        .await
-        .map_err(|e| AppError::Storage(e.to_string()))?;
-    Ok(())
 }
 
 fn attr_s<'a>(item: &'a HashMap<String, AttributeValue>, key: &str) -> Result<&'a str, AppError> {
@@ -314,6 +221,9 @@ impl PublishIdempotency for DynamoDbPublishIdempotency {
 mod tests {
     use super::*;
     use aws_sdk_dynamodb::config::Builder as DdbConfigBuilder;
+    use aws_sdk_dynamodb::types::{
+        AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
+    };
     use domain::FunctionId;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -322,6 +232,30 @@ mod tests {
         let sdk = crate::load_test_aws_config().await;
         let conf = DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build();
         Some(Client::from_conf(conf))
+    }
+
+    async fn ensure_table(client: &Client, table: &str) {
+        client
+            .create_table()
+            .table_name(table)
+            .attribute_definitions(
+                AttributeDefinition::builder()
+                    .attribute_name(ATTR_KEY)
+                    .attribute_type(ScalarAttributeType::S)
+                    .build()
+                    .expect("idempotency_key attr"),
+            )
+            .key_schema(
+                KeySchemaElement::builder()
+                    .attribute_name(ATTR_KEY)
+                    .key_type(KeyType::Hash)
+                    .build()
+                    .expect("hash key"),
+            )
+            .billing_mode(BillingMode::PayPerRequest)
+            .send()
+            .await
+            .expect("create table");
     }
 
     async fn store() -> Option<(DynamoDbPublishIdempotency, Client, String)> {
@@ -333,9 +267,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        DynamoDbPublishIdempotency::ensure_table(&client, &table)
-            .await
-            .expect("table");
+        ensure_table(&client, &table).await;
         Some((
             DynamoDbPublishIdempotency::new(client.clone(), table.clone()),
             client,
