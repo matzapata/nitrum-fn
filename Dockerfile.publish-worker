@@ -29,7 +29,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/nitrum-fn-publish-worker /usr/local/bin/nitrum-fn-publish-worker
-COPY config/worker/base.yaml config/worker/prod.yaml /app/config/worker/
+COPY config/shared/base.yaml config/shared/prod.yaml /app/config/shared/
+COPY config/worker/prod.yaml /app/config/worker/
 
 WORKDIR /app
 USER 65534:65534

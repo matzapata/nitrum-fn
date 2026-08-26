@@ -1,0 +1,5 @@
+# Resource names come from ECS/SSM env. This overlay drops emulator endpoints.
+artifacts:
+  endpoint: null
+catalog:
+  endpoint: null

@@ -4,7 +4,7 @@ resource "aws_ssm_parameter" "env" {
   name        = "/nitrum/${var.project_name}/env/NITRUM_FN_ENV"
   type        = "String"
   value       = "prod"
-  description = "Config overlay (config/host/prod.yaml) for the enclave host"
+  description = "Config overlay (config/shared/prod.yaml) for the enclave host"
 }
 
 resource "aws_ssm_parameter" "s3_bucket" {

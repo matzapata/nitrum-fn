@@ -1,5 +1,0 @@
-# Resource names come from SSM. Host is invoke-only.
-artifacts:
-  endpoint: null
-catalog:
-  endpoint: null

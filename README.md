@@ -106,7 +106,7 @@ aws --endpoint-url http://127.0.0.1:4566 sns subscribe \
   --attributes RawMessageDelivery=true
 
 # 3. Run api + publish-worker + host against the emulators
-# `config/{host,worker,api}/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
+# `config/shared/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 cargo run -p publish-worker &
 cargo run -p api &

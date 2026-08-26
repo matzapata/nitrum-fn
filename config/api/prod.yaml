@@ -1,7 +1,3 @@
-# Resource names come from ECS env. This overlay drops emulator endpoints.
-artifacts:
-  endpoint: null
-catalog:
-  endpoint: null
+# Topic ARN comes from ECS env.
 publish:
   endpoint: null

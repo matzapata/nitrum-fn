@@ -2,6 +2,7 @@ use ::config::{Config, Environment, File};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// `config/shared/base.yaml` → `config/shared/{NITRUM_FN_ENV}.yaml` →
 /// `config/api/base.yaml` → `config/api/{NITRUM_FN_ENV}.yaml` → `NITRUM_FN_*` env.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiConfig {
@@ -44,6 +45,8 @@ impl ApiConfig {
             .unwrap_or_else(|| "local".to_string());
 
         Config::builder()
+            .add_source(File::with_name("config/shared/base").required(false))
+            .add_source(File::with_name(&format!("config/shared/{run_env}")).required(false))
             .add_source(File::with_name("config/api/base").required(false))
             .add_source(File::with_name(&format!("config/api/{run_env}")).required(false))
             .add_source(

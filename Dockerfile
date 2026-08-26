@@ -30,7 +30,8 @@ FROM --platform=linux/amd64 ${DATA_PLANE_IMAGE}
 WORKDIR /app
 COPY --from=builder /out/nitrum-fn-host /app/nitrum-fn-host
 COPY nitrum.toml /app/nitrum.toml
-COPY config/host/base.yaml config/host/prod.yaml /app/config/host/
+COPY config/shared/base.yaml config/shared/prod.yaml /app/config/shared/
+COPY config/host/base.yaml /app/config/host/
 
 EXPOSE 8080
 ENV NITRUM_FN_ENV=prod

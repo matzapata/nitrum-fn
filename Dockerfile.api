@@ -30,6 +30,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/nitrum-fn-api /usr/local/bin/nitrum-fn-api
+COPY config/shared/base.yaml config/shared/prod.yaml /app/config/shared/
 COPY config/api/base.yaml config/api/prod.yaml /app/config/api/
 
 WORKDIR /app

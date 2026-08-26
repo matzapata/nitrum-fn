@@ -2,6 +2,7 @@ use ::config::{Config, Environment, File};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// `config/shared/base.yaml` → `config/shared/{NITRUM_FN_ENV}.yaml` →
 /// `config/host/base.yaml` → `config/host/{NITRUM_FN_ENV}.yaml` → `NITRUM_FN_*` env.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HostConfig {
@@ -35,6 +36,8 @@ impl HostConfig {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "local".to_string());
         Config::builder()
+            .add_source(File::with_name("config/shared/base").required(false))
+            .add_source(File::with_name(&format!("config/shared/{run_env}")).required(false))
             .add_source(File::with_name("config/host/base").required(false))
             .add_source(File::with_name(&format!("config/host/{run_env}")).required(false))
             .add_source(
