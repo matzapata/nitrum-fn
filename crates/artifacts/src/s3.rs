@@ -7,21 +7,13 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
 use domain::{ContentHash, MAX_COMPILED_BYTES, MAX_WASM_BYTES};
 
-fn is_missing_object(err: &SdkError<GetObjectError>) -> bool {
-    match err {
-        SdkError::ServiceError(e) => matches!(e.err(), GetObjectError::NoSuchKey(_)),
-        _ => err
-            .raw_response()
-            .map(|r| r.status().as_u16() == 404)
-            .unwrap_or(false),
-    }
-}
-
 /// Stores `artifacts/{sha256}.wasm` and `artifacts/{sha256}.cwasm` in one bucket.
 pub struct S3ArtifactStore {
+    /// AWS S3 client.
     client: Client,
+    /// AWS S3 bucket name.
     bucket: String,
-    /// Key prefix without trailing slash (e.g. `artifacts`).
+    /// S3 object key prefix without trailing slash (e.g. `artifacts`).
     prefix: String,
 }
 
@@ -33,14 +25,6 @@ impl S3ArtifactStore {
             bucket: bucket.into(),
             prefix,
         }
-    }
-
-    fn wasm_key(&self, hash: &ContentHash) -> String {
-        format!("{}/{}.wasm", self.prefix, hash.to_hex())
-    }
-
-    fn cwasm_key(&self, hash: &ContentHash) -> String {
-        format!("{}/{}.cwasm", self.prefix, hash.to_hex())
     }
 
     async fn get_object(
@@ -102,6 +86,14 @@ impl S3ArtifactStore {
             .map_err(|e| AppError::Storage(e.to_string()))?;
         Ok(())
     }
+
+    fn wasm_key(&self, hash: &ContentHash) -> String {
+        format!("{}/{}.wasm", self.prefix, hash.to_hex())
+    }
+
+    fn cwasm_key(&self, hash: &ContentHash) -> String {
+        format!("{}/{}.cwasm", self.prefix, hash.to_hex())
+    }
 }
 
 #[async_trait]
@@ -130,5 +122,15 @@ impl ArtifactStore for S3ArtifactStore {
     async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
         self.get_object(&self.cwasm_key(hash), hash, MAX_COMPILED_BYTES)
             .await
+    }
+}
+
+fn is_missing_object(err: &SdkError<GetObjectError>) -> bool {
+    match err {
+        SdkError::ServiceError(e) => matches!(e.err(), GetObjectError::NoSuchKey(_)),
+        _ => err
+            .raw_response()
+            .map(|r| r.status().as_u16() == 404)
+            .unwrap_or(false),
     }
 }

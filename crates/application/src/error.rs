@@ -3,9 +3,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    /// Domain error.
     #[error(transparent)]
     Domain(#[from] DomainError),
 
+    /// Function not found.
     #[error("function not found: {0}")]
     NotFound(String),
 
@@ -13,22 +15,27 @@ pub enum AppError {
     #[error("publish conflict: {0}")]
     Conflict(String),
 
+    /// Artifact missing for hash.
     #[error("artifact missing for hash {0}")]
     ArtifactMissing(String),
 
+    /// Artifact hash mismatch.
     #[error("artifact hash mismatch: expected {expected}, got {actual}")]
     HashMismatch { expected: String, actual: String },
 
+    /// Compile failed.
     #[error("compile failed: {0}")]
     Compile(String),
 
+    /// Storage operation failed.
     #[error("storage: {0}")]
     Storage(String),
 
+    /// Invoke failed.
     #[error("invoke failed: {0}")]
     Invoke(String),
 
-    /// Guest trapped while executing `invoke` (Wasmtime trap / panic / unreachable).
+    /// Guest trapped while executing `invoke`.
     #[error("guest trap: {0}")]
     Trap(String),
 

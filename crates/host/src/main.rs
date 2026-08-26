@@ -37,8 +37,10 @@ async fn main() -> Result<()> {
 
     let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
     let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
-    let catalog: Arc<dyn FunctionCatalog> =
-        Arc::new(DynamoDbFunctionCatalog::new(ddb, config.catalog.table.clone()));
+    let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
+        ddb,
+        config.catalog.table.clone(),
+    ));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
         s3,
         config.artifacts.bucket.clone(),

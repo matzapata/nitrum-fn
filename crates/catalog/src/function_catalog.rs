@@ -27,24 +27,6 @@ impl DynamoDbFunctionCatalog {
     }
 }
 
-fn attr_s<'a>(item: &'a HashMap<String, AttributeValue>, key: &str) -> Result<&'a str, AppError> {
-    item.get(key)
-        .and_then(|v| v.as_s().ok())
-        .map(String::as_str)
-        .ok_or_else(|| AppError::Storage(format!("catalog item missing {key}")))
-}
-
-fn version_from_item(item: &HashMap<String, AttributeValue>) -> Result<FunctionVersion, AppError> {
-    let id = FunctionId::new(attr_s(item, ATTR_FN_ID)?).map_err(AppError::from)?;
-    let label = VersionLabel::new(attr_s(item, ATTR_LABEL)?).map_err(AppError::from)?;
-    let content_hash = ContentHash::from_hex(attr_s(item, ATTR_HASH)?).map_err(AppError::from)?;
-    Ok(FunctionVersion {
-        id,
-        label,
-        content_hash,
-    })
-}
-
 #[async_trait]
 impl FunctionCatalog for DynamoDbFunctionCatalog {
     async fn upsert(
@@ -130,4 +112,22 @@ impl FunctionCatalog for DynamoDbFunctionCatalog {
 
         Ok(out)
     }
+}
+
+fn attr_s<'a>(item: &'a HashMap<String, AttributeValue>, key: &str) -> Result<&'a str, AppError> {
+    item.get(key)
+        .and_then(|v| v.as_s().ok())
+        .map(String::as_str)
+        .ok_or_else(|| AppError::Storage(format!("catalog item missing {key}")))
+}
+
+fn version_from_item(item: &HashMap<String, AttributeValue>) -> Result<FunctionVersion, AppError> {
+    let id = FunctionId::new(attr_s(item, ATTR_FN_ID)?).map_err(AppError::from)?;
+    let label = VersionLabel::new(attr_s(item, ATTR_LABEL)?).map_err(AppError::from)?;
+    let content_hash = ContentHash::from_hex(attr_s(item, ATTR_HASH)?).map_err(AppError::from)?;
+    Ok(FunctionVersion {
+        id,
+        label,
+        content_hash,
+    })
 }

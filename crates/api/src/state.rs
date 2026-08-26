@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
 use application::ports::FunctionCatalog;
 use application::PublishFunction;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ApiState {

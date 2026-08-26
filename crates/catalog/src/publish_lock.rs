@@ -28,13 +28,6 @@ impl DynamoDbPublishLock {
     }
 }
 
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 #[async_trait]
 impl PublishLock for DynamoDbPublishLock {
     async fn acquire(
@@ -102,4 +95,11 @@ impl PublishLock for DynamoDbPublishLock {
             Err(err) => Err(AppError::Storage(err.to_string())),
         }
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }

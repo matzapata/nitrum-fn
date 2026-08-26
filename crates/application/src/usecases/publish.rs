@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
+use crate::error::AppError;
+use crate::ports::{ArtifactStore, PublishBus, PublishLock};
 use domain::{
     ContentHash, PublishQueuedEvent, PublishRequest, PublishResponse, VersionLabel, MAX_WASM_BYTES,
 };
+use std::sync::Arc;
 use tracing::instrument;
-
-use crate::error::AppError;
-use crate::ports::{ArtifactStore, PublishBus, PublishLock};
 
 pub struct PublishFunction {
     artifacts: Arc<dyn ArtifactStore>,

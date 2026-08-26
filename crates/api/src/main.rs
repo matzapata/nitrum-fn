@@ -1,8 +1,5 @@
 mod config;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use api::ApiState;
 use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
@@ -16,6 +13,8 @@ use aws_sdk_sns::config::Builder as SnsConfigBuilder;
 use aws_sdk_sns::Client as SnsClient;
 use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use messaging::SnsPublishBus;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tracing::info;
 
 use crate::config::ApiConfig;
@@ -29,10 +28,16 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Load configuration.
     let config = ApiConfig::load().context("load api config")?;
 
-    let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
-    let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
+    // Build AWS clients.
+    let sdk = load_aws_config().await;
+    let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
+    let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+    let sns = build_sns_client(&sdk, config.publish.endpoint.as_deref())?;
+
+    // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
         ddb.clone(),
         config.catalog.table.clone(),
@@ -46,19 +51,18 @@ async fn main() -> Result<()> {
         ddb,
         config.catalog.publish_lock_table.clone(),
     ));
-    info!(
-        bucket = %config.artifacts.bucket,
-        table = %config.catalog.table,
-        publish_lock_table = %config.catalog.publish_lock_table,
-        "using S3 artifacts and DynamoDB catalog"
-    );
+    let bus: Arc<dyn PublishBus> =
+        Arc::new(SnsPublishBus::new(sns, config.publish.topic_arn.clone()));
 
-    let bus = build_publish_bus(&config).await?;
+    // Build publish usecase.
     let publish = Arc::new(PublishFunction::new(artifacts, bus, lock));
 
+    // Build HTTP router.
     let app = api::router(ApiState { publish, catalog });
-
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind {addr}"))?;
     info!(
         %addr,
         bucket = %config.artifacts.bucket,
@@ -67,12 +71,8 @@ async fn main() -> Result<()> {
         catalog_endpoint = ?config.catalog.endpoint,
         publish_topic_arn = %config.publish.topic_arn,
         publish_endpoint = ?config.publish.endpoint,
-        "nitrum-fn api listening"
+        "nitrum-fn api ready"
     );
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind {addr}"))?;
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -80,19 +80,6 @@ async fn main() -> Result<()> {
         .context("serve")?;
 
     Ok(())
-}
-
-async fn build_publish_bus(config: &ApiConfig) -> Result<Arc<dyn PublishBus>> {
-    let client = build_sns_client(config.publish.endpoint.as_deref()).await?;
-    info!(
-        topic_arn = %config.publish.topic_arn,
-        endpoint = ?config.publish.endpoint,
-        "publish bus: SNS"
-    );
-    Ok(Arc::new(SnsPublishBus::new(
-        client,
-        config.publish.topic_arn.clone(),
-    )))
 }
 
 async fn load_aws_config() -> aws_config::SdkConfig {
@@ -107,27 +94,24 @@ async fn load_aws_config() -> aws_config::SdkConfig {
         .await
 }
 
-async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
-    let sdk = load_aws_config().await;
-    let mut builder = S3ConfigBuilder::from(&sdk);
+fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<S3Client> {
+    let mut builder = S3ConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
 }
 
-async fn build_sns_client(endpoint: Option<&str>) -> Result<SnsClient> {
-    let sdk = load_aws_config().await;
-    let mut builder = SnsConfigBuilder::from(&sdk);
+fn build_sns_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<SnsClient> {
+    let mut builder = SnsConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
     Ok(SnsClient::from_conf(builder.build()))
 }
 
-async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
-    let sdk = load_aws_config().await;
-    let mut builder = aws_sdk_dynamodb::config::Builder::from(&sdk);
+fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {
+    let mut builder = aws_sdk_dynamodb::config::Builder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
