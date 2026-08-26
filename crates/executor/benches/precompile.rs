@@ -13,17 +13,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use application::ports::{
-    ArtifactStore, FunctionCatalog, FunctionRunner, IdempotencyClaim, IdempotencyRecord,
-    PublishBus, PublishIdempotency,
-};
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishBus, PublishLock};
 use application::AppError;
 use application::{CompileQueuedFunction, InvokeFunction, PublishFunction};
 use async_trait::async_trait;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use domain::{
-    ContentHash, FunctionId, FunctionVersion, IdempotencyKey, InvokeRequest, PublishQueuedEvent,
-    PublishRequest, VersionLabel,
+    ContentHash, FunctionId, FunctionVersion, InvokeRequest, PublishQueuedEvent, PublishRequest,
+    VersionLabel,
 };
 use executor::WasmtimeRunner;
 use runtime::{encode_request, Request as FnRequest};
@@ -187,23 +184,20 @@ impl FunctionCatalog for MemCatalog {
     }
 }
 
-struct NoopIdempotency;
+struct NoopLock;
 
 #[async_trait]
-impl PublishIdempotency for NoopIdempotency {
-    async fn claim(
+impl PublishLock for NoopLock {
+    async fn acquire(
         &self,
-        _key: &IdempotencyKey,
-        _record: &IdempotencyRecord,
-    ) -> Result<IdempotencyClaim, AppError> {
-        Ok(IdempotencyClaim::Proceed)
+        _function: &FunctionId,
+        _hash: &ContentHash,
+        _queued_at_ms: u64,
+    ) -> Result<(), AppError> {
+        Ok(())
     }
 
-    async fn complete(
-        &self,
-        _key: &IdempotencyKey,
-        _record: &IdempotencyRecord,
-    ) -> Result<(), AppError> {
+    async fn release(&self, _function: &FunctionId, _hash: &ContentHash) -> Result<(), AppError> {
         Ok(())
     }
 }
@@ -233,11 +227,12 @@ impl BenchEnv {
             catalog.clone() as Arc<dyn FunctionCatalog>,
             artifacts.clone() as Arc<dyn ArtifactStore>,
             runner.clone() as Arc<dyn FunctionRunner>,
+            Arc::new(NoopLock) as Arc<dyn PublishLock>,
         ));
         let publish = Arc::new(PublishFunction::new(
             artifacts.clone() as Arc<dyn ArtifactStore>,
             bus.clone() as Arc<dyn PublishBus>,
-            Arc::new(NoopIdempotency) as Arc<dyn PublishIdempotency>,
+            Arc::new(NoopLock) as Arc<dyn PublishLock>,
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
@@ -252,7 +247,6 @@ impl BenchEnv {
             .block_on(publish.execute(PublishRequest {
                 function: function.clone(),
                 wasm: wasm.clone(),
-                idempotency_key: None,
             }))
             .expect("seed publish");
         for event in rt.block_on(bus.take()) {
@@ -294,7 +288,6 @@ fn host_path_benches(c: &mut Criterion) {
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
-                    idempotency_key: None,
                 }));
                 let _ = env.rt.block_on(env.bus.take());
                 black_box(res.expect("publish"));

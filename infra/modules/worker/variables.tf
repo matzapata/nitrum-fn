@@ -38,6 +38,16 @@ variable "catalog_table_arn" {
   description = "ARN of the catalog table."
 }
 
+variable "publish_lock_table_name" {
+  type        = string
+  description = "DynamoDB table for per-function publish locks."
+}
+
+variable "publish_lock_table_arn" {
+  type        = string
+  description = "ARN of the publish lock table."
+}
+
 variable "compile_queue_url" {
   type        = string
   description = "SQS queue URL for compile jobs."

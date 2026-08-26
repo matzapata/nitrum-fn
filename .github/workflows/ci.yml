@@ -64,38 +64,34 @@ jobs:
         with:
           shared-key: rust
           cache-on-failure: true
-      - name: Start Floci (S3+SNS+SQS) and DynamoDB Local
-        run: docker compose up -d
-      - name: Wait for emulators
-        run: |
-          set -euo pipefail
-          wait_tcp() {
-            local host="$1" port="$2" label="$3"
-            for _ in $(seq 1 60); do
-              if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
-                echo "$label ready on ${host}:${port}"
-                return 0
-              fi
-              sleep 0.5
-            done
-            echo "$label not reachable on ${host}:${port}" >&2
-            docker compose logs
-            exit 1
-          }
-          wait_tcp 127.0.0.1 4566 Floci
-          wait_tcp 127.0.0.1 8000 "DynamoDB Local"
       - name: Test
+        run: cargo test --workspace --lib --bins
+
+  adapters:
+    name: Adapter tests (Floci)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          cache-on-failure: true
+      - name: Start Floci
+        run: docker compose up -d --remove-orphans floci
+      - name: Test catalog + artifacts adapters
         env:
           NITRUM_FN_ARTIFACTS__ENDPOINT: http://127.0.0.1:4566
-          NITRUM_FN_CATALOG__ENDPOINT: http://127.0.0.1:8000
+          NITRUM_FN_CATALOG__ENDPOINT: http://127.0.0.1:4566
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
-        run: cargo test --workspace --all-targets
-      - name: Stop emulators
+        run: cargo test --tests -p catalog -p artifacts
+      - name: Stop Floci
         if: always()
-        run: docker compose down
+        run: docker compose down --remove-orphans
 
   e2e:
     name: E2E (publish + invoke)
@@ -118,7 +114,7 @@ jobs:
   publish-images:
     name: Publish images (GHCR)
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: [fmt, lint, audit, test, e2e]
+    needs: [fmt, lint, audit, test, adapters, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

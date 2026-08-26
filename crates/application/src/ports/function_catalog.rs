@@ -15,11 +15,13 @@ pub trait FunctionCatalog: Send + Sync {
         queued_at_ms: u64,
     ) -> Result<bool, AppError>;
 
+    /// Resolve `id`@`label` to the latest version record, or `None` if not found.
     async fn resolve(
         &self,
         id: &FunctionId,
         label: &VersionLabel,
     ) -> Result<FunctionVersion, AppError>;
 
+    /// List all version records.
     async fn list(&self) -> Result<Vec<FunctionVersion>, AppError>;
 }

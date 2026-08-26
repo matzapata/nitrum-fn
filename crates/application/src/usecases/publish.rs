@@ -6,27 +6,24 @@ use domain::{
 use tracing::instrument;
 
 use crate::error::AppError;
-use crate::ports::{
-    ArtifactStore, IdempotencyClaim, IdempotencyRecord, IdempotencyStatus, PublishBus,
-    PublishIdempotency,
-};
+use crate::ports::{ArtifactStore, PublishBus, PublishLock};
 
 pub struct PublishFunction {
     artifacts: Arc<dyn ArtifactStore>,
     bus: Arc<dyn PublishBus>,
-    idempotency: Arc<dyn PublishIdempotency>,
+    lock: Arc<dyn PublishLock>,
 }
 
 impl PublishFunction {
     pub fn new(
         artifacts: Arc<dyn ArtifactStore>,
         bus: Arc<dyn PublishBus>,
-        idempotency: Arc<dyn PublishIdempotency>,
+        lock: Arc<dyn PublishLock>,
     ) -> Self {
         Self {
             artifacts,
             bus,
-            idempotency,
+            lock,
         }
     }
 
@@ -43,49 +40,28 @@ impl PublishFunction {
         }
 
         let hash = ContentHash::from_bytes(&req.wasm);
-        let record = IdempotencyRecord {
-            function: req.function.clone(),
-            content_hash: hash,
-            wasm_bytes: req.wasm.len(),
-            status: IdempotencyStatus::Pending,
-        };
-        if let Some(key) = &req.idempotency_key {
-            match self.idempotency.claim(key, &record).await? {
-                IdempotencyClaim::Replay(existing) => {
-                    return Ok(PublishResponse {
-                        function: req.function,
-                        version: VersionLabel::latest(),
-                        content_hash: existing.content_hash,
-                        wasm_bytes: existing.wasm_bytes,
-                        status: "queued",
-                    });
-                }
-                IdempotencyClaim::Proceed => {}
-            }
-        }
-
-        let stored = self.artifacts.put(&req.wasm).await?;
-        let version = VersionLabel::latest();
         let event =
-            PublishQueuedEvent::new(req.function.to_string(), stored.to_hex(), req.wasm.len());
-        self.bus.publish_queued(&event).await?;
+            PublishQueuedEvent::new(req.function.to_string(), hash.to_hex(), req.wasm.len());
+        self.lock
+            .acquire(&req.function, &hash, event.queued_at_ms)
+            .await?;
 
-        if let Some(key) = &req.idempotency_key {
-            self.idempotency
-                .complete(
-                    key,
-                    &IdempotencyRecord {
-                        content_hash: stored.clone(),
-                        status: IdempotencyStatus::Completed,
-                        ..record
-                    },
-                )
-                .await?;
+        let stored = match self.artifacts.put(&req.wasm).await {
+            Ok(stored) => stored,
+            Err(err) => {
+                let _ = self.lock.release(&req.function, &hash).await;
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = self.bus.publish_queued(&event).await {
+            let _ = self.lock.release(&req.function, &hash).await;
+            return Err(err);
         }
 
         Ok(PublishResponse {
             function: req.function,
-            version,
+            version: VersionLabel::latest(),
             content_hash: stored,
             wasm_bytes: req.wasm.len(),
             status: "queued",
@@ -99,18 +75,27 @@ mod tests {
     use crate::error::AppError;
     use crate::ports::ArtifactStore;
     use async_trait::async_trait;
-    use domain::{FunctionId, IdempotencyKey};
+    use domain::FunctionId;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     struct MemArtifacts {
         wasm: Mutex<HashMap<String, Vec<u8>>>,
+        fail: bool,
     }
 
     impl MemArtifacts {
         fn new() -> Self {
             Self {
                 wasm: Mutex::new(HashMap::new()),
+                fail: false,
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                wasm: Mutex::new(HashMap::new()),
+                fail: true,
             }
         }
     }
@@ -118,6 +103,9 @@ mod tests {
     #[async_trait]
     impl ArtifactStore for MemArtifacts {
         async fn put(&self, wasm: &[u8]) -> Result<ContentHash, AppError> {
+            if self.fail {
+                return Err(AppError::Storage("s3 down".into()));
+            }
             let hash = ContentHash::from_bytes(wasm);
             self.wasm
                 .lock()
@@ -180,67 +168,50 @@ mod tests {
         }
     }
 
-    struct MemIdempotency {
-        records: Mutex<HashMap<String, IdempotencyRecord>>,
+    struct MemLock {
+        /// function_id → content_hash hex of the holder
+        held: Mutex<HashMap<String, String>>,
+        releases: Mutex<u32>,
     }
 
-    impl MemIdempotency {
+    impl MemLock {
         fn new() -> Self {
             Self {
-                records: Mutex::new(HashMap::new()),
+                held: Mutex::new(HashMap::new()),
+                releases: Mutex::new(0),
             }
         }
     }
 
     #[async_trait]
-    impl PublishIdempotency for MemIdempotency {
-        async fn claim(
+    impl PublishLock for MemLock {
+        async fn acquire(
             &self,
-            key: &IdempotencyKey,
-            record: &IdempotencyRecord,
-        ) -> Result<IdempotencyClaim, AppError> {
-            catalog_claim(&mut self.records.lock().unwrap(), key, record)
-        }
-
-        async fn complete(
-            &self,
-            key: &IdempotencyKey,
-            record: &IdempotencyRecord,
+            function: &FunctionId,
+            hash: &ContentHash,
+            _queued_at_ms: u64,
         ) -> Result<(), AppError> {
-            let mut records = self.records.lock().unwrap();
-            let sk = format!("{}#{}", record.function.as_str(), key.as_str());
-            records.insert(
-                sk,
-                IdempotencyRecord {
-                    status: IdempotencyStatus::Completed,
-                    ..record.clone()
-                },
-            );
+            let mut held = self.held.lock().unwrap();
+            if held.contains_key(function.as_str()) {
+                return Err(AppError::Conflict(format!(
+                    "publish already in progress for {function}"
+                )));
+            }
+            held.insert(function.as_str().to_string(), hash.to_hex());
             Ok(())
         }
-    }
 
-    fn catalog_claim(
-        records: &mut HashMap<String, IdempotencyRecord>,
-        key: &IdempotencyKey,
-        proposed: &IdempotencyRecord,
-    ) -> Result<IdempotencyClaim, AppError> {
-        let sk = format!("{}#{}", proposed.function.as_str(), key.as_str());
-        if let Some(existing) = records.get(&sk) {
-            return crate::ports::evaluate_claim(existing, proposed);
+        async fn release(&self, function: &FunctionId, hash: &ContentHash) -> Result<(), AppError> {
+            let mut held = self.held.lock().unwrap();
+            if held
+                .get(function.as_str())
+                .is_some_and(|h| h == &hash.to_hex())
+            {
+                held.remove(function.as_str());
+                *self.releases.lock().unwrap() += 1;
+            }
+            Ok(())
         }
-        records.insert(
-            sk,
-            IdempotencyRecord {
-                status: IdempotencyStatus::Pending,
-                ..proposed.clone()
-            },
-        );
-        Ok(IdempotencyClaim::Proceed)
-    }
-
-    fn key(raw: &str) -> IdempotencyKey {
-        IdempotencyKey::new(raw).unwrap()
     }
 
     #[tokio::test]
@@ -248,13 +219,12 @@ mod tests {
         let publish = PublishFunction::new(
             Arc::new(MemArtifacts::new()),
             Arc::new(MemBus::new()),
-            Arc::new(MemIdempotency::new()),
+            Arc::new(MemLock::new()),
         );
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: vec![],
-                idempotency_key: None,
             })
             .await
             .expect_err("empty");
@@ -265,61 +235,74 @@ mod tests {
     async fn rejects_oversize_wasm_without_put() {
         let artifacts = Arc::new(MemArtifacts::new());
         let bus = Arc::new(MemBus::new());
-        let publish = PublishFunction::new(
-            artifacts.clone(),
-            bus.clone(),
-            Arc::new(MemIdempotency::new()),
-        );
+        let lock = Arc::new(MemLock::new());
+        let publish = PublishFunction::new(artifacts.clone(), bus.clone(), lock.clone());
         let wasm = vec![0u8; domain::MAX_WASM_BYTES + 1];
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm,
-                idempotency_key: None,
             })
             .await
             .expect_err("too large");
         assert!(matches!(err, AppError::PayloadTooLarge(_)), "{err}");
         assert!(artifacts.wasm.lock().unwrap().is_empty());
         assert!(bus.events.lock().unwrap().is_empty());
+        assert!(lock.held.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn bus_error_after_put_still_stores_wasm() {
+    async fn bus_error_after_put_releases_lock() {
         let artifacts = Arc::new(MemArtifacts::new());
-        let publish = PublishFunction::new(
-            artifacts.clone(),
-            Arc::new(MemBus::failing()),
-            Arc::new(MemIdempotency::new()),
-        );
+        let lock = Arc::new(MemLock::new());
+        let publish =
+            PublishFunction::new(artifacts.clone(), Arc::new(MemBus::failing()), lock.clone());
         let wasm = b"\0asm not empty".to_vec();
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
-                idempotency_key: None,
             })
             .await
             .expect_err("bus");
         assert!(matches!(err, AppError::Storage(_)), "{err}");
         let hash = ContentHash::from_bytes(&wasm);
         assert_eq!(artifacts.get(&hash).await.unwrap(), wasm);
+        assert!(lock.held.lock().unwrap().is_empty());
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn put_error_releases_lock() {
+        let lock = Arc::new(MemLock::new());
+        let publish = PublishFunction::new(
+            Arc::new(MemArtifacts::failing()),
+            Arc::new(MemBus::new()),
+            lock.clone(),
+        );
+        let err = publish
+            .execute(PublishRequest {
+                function: FunctionId::new("echo").unwrap(),
+                wasm: b"\0asm not empty".to_vec(),
+            })
+            .await
+            .expect_err("put");
+        assert!(matches!(err, AppError::Storage(_)), "{err}");
+        assert!(lock.held.lock().unwrap().is_empty());
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
     }
 
     #[tokio::test]
     async fn enqueue_records_hash_and_generation() {
         let bus = Arc::new(MemBus::new());
-        let publish = PublishFunction::new(
-            Arc::new(MemArtifacts::new()),
-            bus.clone(),
-            Arc::new(MemIdempotency::new()),
-        );
+        let lock = Arc::new(MemLock::new());
+        let publish =
+            PublishFunction::new(Arc::new(MemArtifacts::new()), bus.clone(), lock.clone());
         let wasm = b"\0asm module".to_vec();
         let res = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
-                idempotency_key: None,
             })
             .await
             .expect("publish");
@@ -328,42 +311,18 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].content_hash, res.content_hash.to_hex());
         assert!(events[0].queued_at_ms > 0);
+        assert!(lock.held.lock().unwrap().contains_key("echo"));
     }
 
     #[tokio::test]
-    async fn same_key_same_body_does_not_enqueue_twice() {
+    async fn second_publish_while_locked_conflicts() {
         let bus = Arc::new(MemBus::new());
-        let publish = PublishFunction::new(
-            Arc::new(MemArtifacts::new()),
-            bus.clone(),
-            Arc::new(MemIdempotency::new()),
-        );
-        let wasm = b"\0asm module".to_vec();
-        let req = PublishRequest {
-            function: FunctionId::new("echo").unwrap(),
-            wasm,
-            idempotency_key: Some(key("retry-1")),
-        };
-        let first = publish.execute(req.clone()).await.expect("first");
-        let second = publish.execute(req).await.expect("second");
-        assert_eq!(first.content_hash, second.content_hash);
-        assert_eq!(bus.events.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn same_key_different_body_conflicts_without_second_enqueue() {
-        let bus = Arc::new(MemBus::new());
-        let publish = PublishFunction::new(
-            Arc::new(MemArtifacts::new()),
-            bus.clone(),
-            Arc::new(MemIdempotency::new()),
-        );
-        let k = Some(key("retry-1"));
+        let lock = Arc::new(MemLock::new());
+        let publish = PublishFunction::new(Arc::new(MemArtifacts::new()), bus.clone(), lock);
         publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm one".to_vec(),
-                idempotency_key: k.clone(),
             })
             .await
             .expect("first");
@@ -371,7 +330,6 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm two".to_vec(),
-                idempotency_key: k,
             })
             .await
             .expect_err("conflict");
@@ -380,49 +338,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_claim_retries_enqueue() {
-        let bus = Arc::new(MemBus::new());
-        let idem = Arc::new(MemIdempotency::new());
-        let wasm = b"\0asm module".to_vec();
-        let function = FunctionId::new("echo").unwrap();
-        let k = key("retry-1");
-        let record = IdempotencyRecord {
-            function: function.clone(),
-            content_hash: ContentHash::from_bytes(&wasm),
-            wasm_bytes: wasm.len(),
-            status: IdempotencyStatus::Pending,
-        };
-        idem.claim(&k, &record).await.expect("seed pending");
-        let publish = PublishFunction::new(Arc::new(MemArtifacts::new()), bus.clone(), idem);
-        publish
-            .execute(PublishRequest {
-                function,
-                wasm,
-                idempotency_key: Some(k),
-            })
-            .await
-            .expect("recover");
-        assert_eq!(bus.events.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn concurrent_different_body_only_winner_enqueues() {
+    async fn concurrent_publishes_only_one_wins() {
         let bus = Arc::new(MemBus::new());
         let publish = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts::new()),
             bus.clone(),
-            Arc::new(MemIdempotency::new()),
+            Arc::new(MemLock::new()),
         ));
-        let k = key("retry-1");
         let a = publish.execute(PublishRequest {
             function: FunctionId::new("echo").unwrap(),
             wasm: b"\0asm one".to_vec(),
-            idempotency_key: Some(k.clone()),
         });
         let b = publish.execute(PublishRequest {
             function: FunctionId::new("echo").unwrap(),
             wasm: b"\0asm two".to_vec(),
-            idempotency_key: Some(k),
         });
         let (ra, rb) = tokio::join!(a, b);
         let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();

@@ -32,35 +32,6 @@ impl fmt::Display for FunctionId {
     }
 }
 
-/// Client-supplied key for retrying `PUT /functions/{name}` without a second enqueue.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IdempotencyKey(String);
-
-impl IdempotencyKey {
-    pub fn new(raw: impl Into<String>) -> Result<Self, DomainError> {
-        let s = raw.into();
-        if s.is_empty()
-            || s.len() > 128
-            || !s
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(DomainError::InvalidIdempotencyKey(s));
-        }
-        Ok(Self(s))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for IdempotencyKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// Mutable label like `v1` or `latest` resolved via the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VersionLabel(String);
@@ -133,28 +104,4 @@ pub struct FunctionVersion {
     pub id: FunctionId,
     pub label: VersionLabel,
     pub content_hash: ContentHash,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_empty_and_illegal_idempotency_keys() {
-        assert!(matches!(
-            IdempotencyKey::new(""),
-            Err(DomainError::InvalidIdempotencyKey(_))
-        ));
-        assert!(matches!(
-            IdempotencyKey::new("retry/1"),
-            Err(DomainError::InvalidIdempotencyKey(_))
-        ));
-        assert!(IdempotencyKey::new("a".repeat(129)).is_err());
-    }
-
-    #[test]
-    fn accepts_uuid_shaped_idempotency_keys() {
-        let key = IdempotencyKey::new("550e8400-e29b-41d4-a716-446655440000").expect("uuid");
-        assert_eq!(key.as_str(), "550e8400-e29b-41d4-a716-446655440000");
-    }
 }

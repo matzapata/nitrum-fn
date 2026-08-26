@@ -15,7 +15,7 @@ use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
-use catalog::DynamoDbCatalog;
+use catalog::DynamoDbFunctionCatalog;
 use executor::WasmtimeRunner;
 use tracing::info;
 
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
     let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
     let catalog: Arc<dyn FunctionCatalog> =
-        Arc::new(DynamoDbCatalog::new(ddb, config.catalog.table.clone()));
+        Arc::new(DynamoDbFunctionCatalog::new(ddb, config.catalog.table.clone()));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
         s3,
         config.artifacts.bucket.clone(),

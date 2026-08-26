@@ -5,7 +5,9 @@ mod config;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use application::ports::{ArtifactStore, CompileQueue, FunctionCatalog, FunctionRunner};
+use application::ports::{
+    ArtifactStore, CompileQueue, FunctionCatalog, FunctionRunner, PublishLock,
+};
 use application::{AppError, CompileQueuedFunction};
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
@@ -14,7 +16,7 @@ use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
 use aws_sdk_sqs::Client as SqsClient;
-use catalog::DynamoDbCatalog;
+use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use domain::PublishQueuedEvent;
 use executor::WasmtimeRunner;
 use messaging::{SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
@@ -36,8 +38,14 @@ async fn main() -> Result<()> {
 
     let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
     let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
-    let catalog: Arc<dyn FunctionCatalog> =
-        Arc::new(DynamoDbCatalog::new(ddb, config.catalog.table.clone()));
+    let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
+        ddb.clone(),
+        config.catalog.table.clone(),
+    ));
+    let lock: Arc<dyn PublishLock> = Arc::new(DynamoDbPublishLock::new(
+        ddb,
+        config.catalog.publish_lock_table.clone(),
+    ));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
         s3,
         config.artifacts.bucket.clone(),
@@ -46,7 +54,7 @@ async fn main() -> Result<()> {
 
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
-    let compile = Arc::new(CompileQueuedFunction::new(catalog, artifacts, runner));
+    let compile = Arc::new(CompileQueuedFunction::new(catalog, artifacts, runner, lock));
 
     let sqs = build_sqs_client(config.compile.endpoint.as_deref()).await?;
     let queue: Arc<dyn CompileQueue> =

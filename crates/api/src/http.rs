@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use domain::{FunctionId, IdempotencyKey, PublishRequest, VersionLabel, MAX_WASM_BYTES};
+use domain::{FunctionId, PublishRequest, VersionLabel, MAX_WASM_BYTES};
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
@@ -56,27 +56,14 @@ struct FunctionBody {
 async fn publish(
     State(state): State<PublishState>,
     Path(name): Path<String>,
-    headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, HttpError> {
     let function = FunctionId::new(&name).map_err(application::AppError::from)?;
-    let idempotency_key = match headers.get("idempotency-key") {
-        Some(value) => {
-            let raw = value.to_str().map_err(|_| {
-                application::AppError::from(domain::DomainError::InvalidIdempotencyKey(
-                    "<non-utf8>".into(),
-                ))
-            })?;
-            Some(IdempotencyKey::new(raw).map_err(application::AppError::from)?)
-        }
-        None => None,
-    };
     let response = state
         .publish
         .execute(PublishRequest {
             function,
             wasm: body.to_vec(),
-            idempotency_key,
         })
         .await?;
 
@@ -111,10 +98,7 @@ async fn get_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use application::ports::{
-        evaluate_claim, ArtifactStore, IdempotencyClaim, IdempotencyRecord, IdempotencyStatus,
-        PublishBus, PublishIdempotency,
-    };
+    use application::ports::{ArtifactStore, PublishBus, PublishLock};
     use application::AppError;
     use async_trait::async_trait;
     use axum::body::Body;
@@ -166,54 +150,44 @@ mod tests {
         }
     }
 
-    struct MemIdempotency {
-        records: Mutex<HashMap<String, IdempotencyRecord>>,
+    struct MemLock {
+        held: Mutex<HashMap<String, String>>,
     }
 
-    impl MemIdempotency {
+    impl MemLock {
         fn new() -> Self {
             Self {
-                records: Mutex::new(HashMap::new()),
+                held: Mutex::new(HashMap::new()),
             }
         }
     }
 
     #[async_trait]
-    impl PublishIdempotency for MemIdempotency {
-        async fn claim(
+    impl PublishLock for MemLock {
+        async fn acquire(
             &self,
-            key: &IdempotencyKey,
-            record: &IdempotencyRecord,
-        ) -> Result<IdempotencyClaim, AppError> {
-            let mut records = self.records.lock().unwrap();
-            let sk = format!("{}#{}", record.function.as_str(), key.as_str());
-            if let Some(existing) = records.get(&sk) {
-                return evaluate_claim(existing, record);
+            function: &FunctionId,
+            hash: &ContentHash,
+            _queued_at_ms: u64,
+        ) -> Result<(), AppError> {
+            let mut held = self.held.lock().unwrap();
+            if held.contains_key(function.as_str()) {
+                return Err(AppError::Conflict(format!(
+                    "publish already in progress for {function}"
+                )));
             }
-            records.insert(
-                sk,
-                IdempotencyRecord {
-                    status: IdempotencyStatus::Pending,
-                    ..record.clone()
-                },
-            );
-            Ok(IdempotencyClaim::Proceed)
+            held.insert(function.as_str().to_string(), hash.to_hex());
+            Ok(())
         }
 
-        async fn complete(
-            &self,
-            key: &IdempotencyKey,
-            record: &IdempotencyRecord,
-        ) -> Result<(), AppError> {
-            let mut records = self.records.lock().unwrap();
-            let sk = format!("{}#{}", record.function.as_str(), key.as_str());
-            records.insert(
-                sk,
-                IdempotencyRecord {
-                    status: IdempotencyStatus::Completed,
-                    ..record.clone()
-                },
-            );
+        async fn release(&self, function: &FunctionId, hash: &ContentHash) -> Result<(), AppError> {
+            let mut held = self.held.lock().unwrap();
+            if held
+                .get(function.as_str())
+                .is_some_and(|h| h == &hash.to_hex())
+            {
+                held.remove(function.as_str());
+            }
             Ok(())
         }
     }
@@ -223,81 +197,44 @@ mod tests {
         let usecase = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts),
             bus.clone(),
-            Arc::new(MemIdempotency::new()),
+            Arc::new(MemLock::new()),
         ));
         (publish_router(usecase), bus)
     }
 
-    fn put(key: Option<&str>, body: &'static [u8]) -> Request<Body> {
-        let mut builder = Request::builder()
+    fn put(body: &'static [u8]) -> Request<Body> {
+        Request::builder()
             .method("PUT")
             .uri("/functions/echo")
-            .header("content-type", "application/wasm");
-        if let Some(key) = key {
-            builder = builder.header("idempotency-key", key);
-        }
-        builder.body(Body::from(body)).unwrap()
+            .header("content-type", "application/wasm")
+            .body(Body::from(body))
+            .unwrap()
     }
 
     #[tokio::test]
-    async fn invalid_idempotency_key_is_400() {
-        let (app, _) = publish_app();
-        let res = app
-            .oneshot(put(Some("retry/1"), b"\0asm one"))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn non_utf8_idempotency_key_is_400() {
-        let (app, _) = publish_app();
-        let mut req = put(None, b"\0asm one");
-        req.headers_mut().insert(
-            "idempotency-key",
-            axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
-        );
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn reused_key_different_body_is_409() {
+    async fn second_publish_while_in_progress_is_409() {
         let usecase = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts),
             Arc::new(MemBus::new()),
-            Arc::new(MemIdempotency::new()),
+            Arc::new(MemLock::new()),
         ));
         let first = publish_router(usecase.clone())
-            .oneshot(put(Some("retry-1"), b"\0asm one"))
+            .oneshot(put(b"\0asm one"))
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         let second = publish_router(usecase)
-            .oneshot(put(Some("retry-1"), b"\0asm two"))
+            .oneshot(put(b"\0asm two"))
             .await
             .unwrap();
         assert_eq!(second.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
-    async fn reused_key_same_body_is_accepted_once_on_the_bus() {
-        let bus = Arc::new(MemBus::new());
-        let usecase = Arc::new(PublishFunction::new(
-            Arc::new(MemArtifacts),
-            bus.clone(),
-            Arc::new(MemIdempotency::new()),
-        ));
-        let first = publish_router(usecase.clone())
-            .oneshot(put(Some("retry-1"), b"\0asm one"))
-            .await
-            .unwrap();
-        assert_eq!(first.status(), StatusCode::ACCEPTED);
-        let second = publish_router(usecase)
-            .oneshot(put(Some("retry-1"), b"\0asm one"))
-            .await
-            .unwrap();
-        assert_eq!(second.status(), StatusCode::ACCEPTED);
+    async fn publish_without_extra_headers_is_accepted() {
+        let (app, bus) = publish_app();
+        let res = app.oneshot(put(b"\0asm one")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
         assert_eq!(bus.events.lock().unwrap().len(), 1);
     }
 

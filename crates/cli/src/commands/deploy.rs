@@ -17,10 +17,6 @@ pub struct DeployArgs {
     /// How long to wait for the compile worker to upsert the catalog
     #[arg(long, env = "NITRUM_FN_DEPLOY_TIMEOUT_SECS", default_value_t = 180)]
     pub timeout_secs: u64,
-    /// Retry the same deploy without a second compile enqueue. Generated if omitted;
-    /// printed immediately so a failed or timed-out deploy can be retried.
-    #[arg(long, env = "NITRUM_FN_IDEMPOTENCY_KEY")]
-    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,12 +46,6 @@ pub async fn run(args: DeployArgs) -> Result<()> {
         .with_context(|| format!("read {}", args.wasm.display()))?;
     tracing::debug!(bytes = wasm.len(), "read wasm");
 
-    let key = match args.idempotency_key {
-        Some(k) => k,
-        None => uuid::Uuid::new_v4().to_string(),
-    };
-    eprintln!("idempotency_key={key}");
-
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(3))
@@ -68,11 +58,10 @@ pub async fn run(args: DeployArgs) -> Result<()> {
     let response = client
         .put(&endpoint)
         .header("content-type", "application/wasm")
-        .header("idempotency-key", &key)
         .body(wasm)
         .send()
         .await
-        .with_context(|| format!("PUT {endpoint} (idempotency_key={key})"))?;
+        .with_context(|| format!("PUT {endpoint}"))?;
 
     let status = response.status();
     let bytes = response.bytes().await.context("read response")?;
@@ -81,7 +70,7 @@ pub async fn run(args: DeployArgs) -> Result<()> {
         let msg = serde_json::from_slice::<ErrorBody>(&bytes)
             .map(|b| b.error)
             .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
-        anyhow::bail!("deploy failed ({status}): {msg} (idempotency_key={key})");
+        anyhow::bail!("deploy failed ({status}): {msg}");
     }
 
     let body: PublishBody = serde_json::from_slice(&bytes).context("decode response")?;
@@ -91,11 +80,11 @@ pub async fn run(args: DeployArgs) -> Result<()> {
         version = %body.version,
         "deploy accepted"
     );
-    wait_until_ready(&client, &endpoint, &body.hash, args.timeout_secs, &key).await?;
+    wait_until_ready(&client, &endpoint, &body.hash, args.timeout_secs).await?;
 
     println!(
-        "deployed {}@{} hash={} wasm_bytes={} status=ready idempotency_key={}",
-        body.name, body.version, body.hash, body.wasm_bytes, key
+        "deployed {}@{} hash={} wasm_bytes={} status=ready",
+        body.name, body.version, body.hash, body.wasm_bytes
     );
     Ok(())
 }
@@ -106,7 +95,6 @@ async fn wait_until_ready(
     endpoint: &str,
     expected_hash: &str,
     timeout_secs: u64,
-    idempotency_key: &str,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut delay = Duration::from_millis(200);
@@ -114,7 +102,7 @@ async fn wait_until_ready(
     loop {
         if Instant::now() >= deadline {
             anyhow::bail!(
-                "timed out after {timeout_secs}s waiting for function ready (hash={expected_hash} idempotency_key={idempotency_key})"
+                "timed out after {timeout_secs}s waiting for function ready (hash={expected_hash})"
             );
         }
 
@@ -122,7 +110,7 @@ async fn wait_until_ready(
             .get(endpoint)
             .send()
             .await
-            .with_context(|| format!("GET {endpoint} (idempotency_key={idempotency_key})"))?;
+            .with_context(|| format!("GET {endpoint}"))?;
 
         if response.status().as_u16() == 404 {
             tracing::debug!(retry_in = ?delay, "function not in catalog yet");
@@ -137,7 +125,7 @@ async fn wait_until_ready(
             let msg = serde_json::from_slice::<ErrorBody>(&bytes)
                 .map(|b| b.error)
                 .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
-            anyhow::bail!("poll failed ({status}): {msg} (idempotency_key={idempotency_key})");
+            anyhow::bail!("poll failed ({status}): {msg}");
         }
 
         let meta: FunctionBody = response.json().await.context("decode function metadata")?;

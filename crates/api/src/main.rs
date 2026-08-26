@@ -14,7 +14,7 @@ use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::config::Builder as SnsConfigBuilder;
 use aws_sdk_sns::Client as SnsClient;
-use catalog::{DynamoDbCatalog, DynamoDbPublishIdempotency};
+use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use messaging::SnsPublishBus;
 use tracing::info;
 
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
 
     let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
     let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
-    let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbCatalog::new(
+    let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
         ddb.clone(),
         config.catalog.table.clone(),
     ));
@@ -42,19 +42,19 @@ async fn main() -> Result<()> {
         config.artifacts.bucket.clone(),
         config.artifacts.prefix.clone(),
     ));
-    let idempotency = Arc::new(DynamoDbPublishIdempotency::new(
+    let lock = Arc::new(DynamoDbPublishLock::new(
         ddb,
-        config.catalog.idempotency_table.clone(),
+        config.catalog.publish_lock_table.clone(),
     ));
     info!(
         bucket = %config.artifacts.bucket,
         table = %config.catalog.table,
-        idem_table = %config.catalog.idempotency_table,
+        publish_lock_table = %config.catalog.publish_lock_table,
         "using S3 artifacts and DynamoDB catalog"
     );
 
     let bus = build_publish_bus(&config).await?;
-    let publish = Arc::new(PublishFunction::new(artifacts, bus, idempotency));
+    let publish = Arc::new(PublishFunction::new(artifacts, bus, lock));
 
     let app = api::router(ApiState { publish, catalog });
 

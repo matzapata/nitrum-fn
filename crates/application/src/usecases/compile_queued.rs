@@ -4,13 +4,14 @@ use domain::{ContentHash, FunctionId, PublishQueuedEvent, VersionLabel, MAX_WASM
 use tracing::instrument;
 
 use crate::error::AppError;
-use crate::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
+use crate::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishLock};
 
 /// Worker-side: AOT-compile a queued `.wasm` and publish it to the catalog.
 pub struct CompileQueuedFunction {
     catalog: Arc<dyn FunctionCatalog>,
     artifacts: Arc<dyn ArtifactStore>,
     runner: Arc<dyn FunctionRunner>,
+    lock: Arc<dyn PublishLock>,
 }
 
 impl CompileQueuedFunction {
@@ -18,11 +19,13 @@ impl CompileQueuedFunction {
         catalog: Arc<dyn FunctionCatalog>,
         artifacts: Arc<dyn ArtifactStore>,
         runner: Arc<dyn FunctionRunner>,
+        lock: Arc<dyn PublishLock>,
     ) -> Self {
         Self {
             catalog,
             artifacts,
             runner,
+            lock,
         }
     }
 
@@ -62,7 +65,12 @@ impl CompileQueuedFunction {
 
         let applied = self
             .catalog
-            .upsert(&function, &VersionLabel::latest(), hash, event.queued_at_ms)
+            .upsert(
+                &function,
+                &VersionLabel::latest(),
+                hash.clone(),
+                event.queued_at_ms,
+            )
             .await?;
         if !applied {
             tracing::info!(
@@ -72,6 +80,8 @@ impl CompileQueuedFunction {
                 "skipped stale catalog upsert"
             );
         }
+
+        self.lock.release(&function, &hash).await?;
         Ok(())
     }
 }
@@ -208,12 +218,21 @@ mod tests {
 
     struct Runner {
         compiles: Mutex<u32>,
+        fail: bool,
     }
 
     impl Runner {
         fn new() -> Self {
             Self {
                 compiles: Mutex::new(0),
+                fail: false,
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                compiles: Mutex::new(0),
+                fail: true,
             }
         }
     }
@@ -221,6 +240,9 @@ mod tests {
     #[async_trait]
     impl FunctionRunner for Runner {
         async fn compile(&self, _hash: &ContentHash, _wasm: &[u8]) -> Result<Vec<u8>, AppError> {
+            if self.fail {
+                return Err(AppError::Compile("boom".into()));
+            }
             *self.compiles.lock().unwrap() += 1;
             Ok(b"cwasm".to_vec())
         }
@@ -244,6 +266,48 @@ mod tests {
         }
     }
 
+    struct MemLock {
+        held: Mutex<HashMap<String, String>>,
+        releases: Mutex<u32>,
+    }
+
+    impl MemLock {
+        fn holding(function: &str, hash: &ContentHash) -> Self {
+            Self {
+                held: Mutex::new(HashMap::from([(function.to_string(), hash.to_hex())])),
+                releases: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PublishLock for MemLock {
+        async fn acquire(
+            &self,
+            function: &FunctionId,
+            hash: &ContentHash,
+            _queued_at_ms: u64,
+        ) -> Result<(), AppError> {
+            self.held
+                .lock()
+                .unwrap()
+                .insert(function.as_str().to_string(), hash.to_hex());
+            Ok(())
+        }
+
+        async fn release(&self, function: &FunctionId, hash: &ContentHash) -> Result<(), AppError> {
+            let mut held = self.held.lock().unwrap();
+            if held
+                .get(function.as_str())
+                .is_some_and(|h| h == &hash.to_hex())
+            {
+                held.remove(function.as_str());
+                *self.releases.lock().unwrap() += 1;
+            }
+            Ok(())
+        }
+    }
+
     fn event(hash: &ContentHash, queued_at_ms: u64) -> PublishQueuedEvent {
         PublishQueuedEvent {
             function: "echo".into(),
@@ -254,39 +318,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hash_mismatch_skips_catalog() {
+    async fn hash_mismatch_skips_catalog_and_keeps_lock() {
         let wasm = b"wasm".to_vec();
         let claimed = ContentHash::from_bytes(b"other");
         let artifacts = Arc::new(MemArtifacts::with_wasm(&claimed, wasm));
-        // store under claimed key but bytes hash to something else
         let catalog = Arc::new(MemCatalog::new());
-        let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts, Arc::new(Runner::new()));
+        let lock = Arc::new(MemLock::holding("echo", &claimed));
+        let compile = CompileQueuedFunction::new(
+            catalog.clone(),
+            artifacts,
+            Arc::new(Runner::new()),
+            lock.clone(),
+        );
         let err = compile
             .execute(&event(&claimed, 1))
             .await
             .expect_err("mismatch");
         assert!(matches!(err, AppError::HashMismatch { .. }), "{err}");
         assert!(catalog.hash.lock().unwrap().is_none());
+        assert!(lock.held.lock().unwrap().contains_key("echo"));
+        assert_eq!(*lock.releases.lock().unwrap(), 0);
     }
 
     #[tokio::test]
-    async fn success_compiles_and_upserts() {
+    async fn success_compiles_upserts_and_releases() {
         let wasm = b"wasm".to_vec();
         let hash = ContentHash::from_bytes(&wasm);
         let artifacts = Arc::new(MemArtifacts::with_wasm(&hash, wasm));
         let catalog = Arc::new(MemCatalog::new());
         let runner = Arc::new(Runner::new());
-        let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), runner.clone());
+        let lock = Arc::new(MemLock::holding("echo", &hash));
+        let compile = CompileQueuedFunction::new(
+            catalog.clone(),
+            artifacts.clone(),
+            runner.clone(),
+            lock.clone(),
+        );
         compile.execute(&event(&hash, 10)).await.expect("compile");
         assert_eq!(catalog.hash.lock().unwrap().as_ref(), Some(&hash));
         assert_eq!(artifacts.get_compiled(&hash).await.unwrap(), b"cwasm");
         assert_eq!(*runner.compiles.lock().unwrap(), 1);
+        assert!(lock.held.lock().unwrap().is_empty());
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
     }
 
     #[tokio::test]
-    async fn existing_cwasm_skips_compile() {
+    async fn existing_cwasm_skips_compile_and_releases() {
         let wasm = b"wasm".to_vec();
         let hash = ContentHash::from_bytes(&wasm);
         let artifacts = Arc::new(MemArtifacts::with_both(
@@ -296,8 +373,13 @@ mod tests {
         ));
         let catalog = Arc::new(MemCatalog::new());
         let runner = Arc::new(Runner::new());
-        let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), runner.clone());
+        let lock = Arc::new(MemLock::holding("echo", &hash));
+        let compile = CompileQueuedFunction::new(
+            catalog.clone(),
+            artifacts.clone(),
+            runner.clone(),
+            lock.clone(),
+        );
         compile.execute(&event(&hash, 10)).await.expect("skip");
         assert_eq!(catalog.hash.lock().unwrap().as_ref(), Some(&hash));
         assert_eq!(
@@ -305,18 +387,48 @@ mod tests {
             b"already-cwasm"
         );
         assert_eq!(*runner.compiles.lock().unwrap(), 0);
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
     }
 
     #[tokio::test]
-    async fn stale_generation_still_writes_compiled() {
+    async fn stale_generation_still_writes_compiled_and_releases() {
         let wasm = b"wasm".to_vec();
         let hash = ContentHash::from_bytes(&wasm);
         let artifacts = Arc::new(MemArtifacts::with_wasm(&hash, wasm));
         let catalog = Arc::new(MemCatalog::stale());
-        let compile =
-            CompileQueuedFunction::new(catalog.clone(), artifacts.clone(), Arc::new(Runner::new()));
+        let lock = Arc::new(MemLock::holding("echo", &hash));
+        let compile = CompileQueuedFunction::new(
+            catalog.clone(),
+            artifacts.clone(),
+            Arc::new(Runner::new()),
+            lock.clone(),
+        );
         compile.execute(&event(&hash, 1)).await.expect("ok");
         assert!(catalog.hash.lock().unwrap().is_none());
         assert_eq!(artifacts.get_compiled(&hash).await.unwrap(), b"cwasm");
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn compile_error_keeps_lock() {
+        let wasm = b"wasm".to_vec();
+        let hash = ContentHash::from_bytes(&wasm);
+        let artifacts = Arc::new(MemArtifacts::with_wasm(&hash, wasm));
+        let catalog = Arc::new(MemCatalog::new());
+        let lock = Arc::new(MemLock::holding("echo", &hash));
+        let compile = CompileQueuedFunction::new(
+            catalog.clone(),
+            artifacts,
+            Arc::new(Runner::failing()),
+            lock.clone(),
+        );
+        let err = compile
+            .execute(&event(&hash, 10))
+            .await
+            .expect_err("compile");
+        assert!(matches!(err, AppError::Compile(_)), "{err}");
+        assert!(catalog.hash.lock().unwrap().is_none());
+        assert!(lock.held.lock().unwrap().contains_key("echo"));
+        assert_eq!(*lock.releases.lock().unwrap(), 0);
     }
 }

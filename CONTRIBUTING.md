@@ -6,7 +6,6 @@ How to develop, test, and run a staging e2e. Product context lives in [`README.m
 
 - Rust **1.95** (`rust-toolchain.toml`; rustup installs it)
 - Docker (Compose for local S3/DynamoDB; Buildx/QEMU on Apple Silicon for `linux/amd64` images)
-- AWS CLI (create bucket/tables/topic/queue against Floci + DynamoDB Local; Terraform owns cloud)
 - `wasm32-unknown-unknown` for guest examples: `rustup target add wasm32-unknown-unknown`
 - **[Nitrum CLI](https://github.com/matzapata/nitrum)** for EIF build (`nitrum build`). Staging also needs AWS credentials, Terraform ≥ 1.5, and a state backend (see [infra README](infra/README.md#prerequisites-once-per-account)).
 
@@ -23,17 +22,18 @@ No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed 
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, workspace tests (with Floci S3+SNS+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
+CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, unit tests (`--lib --bins`), Floci adapter tests (`catalog` / `artifacts` integration tests), and `tests/e2e/local.sh`. Match that locally:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo audit
-docker compose up -d
+cargo test --workspace --lib --bins
+docker compose up -d --remove-orphans floci
 NITRUM_FN_ARTIFACTS__ENDPOINT=http://127.0.0.1:4566 \
-NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:8000 \
+NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:4566 \
 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
-  cargo test --workspace --all-targets
+  cargo test --tests -p catalog -p artifacts
 bash tests/e2e/local.sh
 ```
 
@@ -41,38 +41,11 @@ bash tests/e2e/local.sh
 
 ## Local stack
 
-Publish is async: the **api** publishes to Floci **SNS**, which fans out to **SQS**; **publish-worker** AOT-compiles; the **host** invokes from the catalog + S3 artifacts. Start emulators (Floci + DynamoDB Local), create the bucket/tables/topic/queue, then api + worker + host:
+Publish is async: the **api** publishes to Floci **SNS**, which fans out to **SQS**; **publish-worker** AOT-compiles; the **host** invokes from the catalog + S3 artifacts. Compose starts Floci (S3+SNS+SQS+DynamoDB) and `aws-init` creates the bucket, tables, topic, and queue (`config/shared/local.yaml`).
 
 ```bash
-docker compose up -d
-
-export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
-aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://nitrum-fn
-aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
-  --table-name nitrum-fn-catalog \
-  --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
-  --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST
-aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
-  --table-name nitrum-fn-catalog-idempotency \
-  --attribute-definitions AttributeName=idempotency_key,AttributeType=S \
-  --key-schema AttributeName=idempotency_key,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST
-aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
-  --table-name nitrum-fn-catalog-idempotency \
-  --time-to-live-specification Enabled=true,AttributeName=expires_at
-aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
-  --queue-name nitrum-fn-compile \
-  --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
-QUEUE_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sqs get-queue-attributes \
-  --queue-url http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
-  --attribute-names QueueArn --query Attributes.QueueArn --output text)
-TOPIC_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sns create-topic \
-  --name nitrum-fn-publish --query TopicArn --output text)
-aws --endpoint-url http://127.0.0.1:4566 sns subscribe \
-  --topic-arn "$TOPIC_ARN" --protocol sqs \
-  --notification-endpoint "$QUEUE_ARN" \
-  --attributes RawMessageDelivery=true
+docker compose up -d --remove-orphans floci
+docker compose run --rm aws-init
 
 # `config/shared/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test

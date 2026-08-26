@@ -9,8 +9,8 @@ pub enum AppError {
     #[error("function not found: {0}")]
     NotFound(String),
 
-    /// Same `Idempotency-Key` with a different function or wasm hash.
-    #[error("idempotency conflict: {0}")]
+    /// Another publish of this function is already in progress.
+    #[error("publish conflict: {0}")]
     Conflict(String),
 
     #[error("artifact missing for hash {0}")]

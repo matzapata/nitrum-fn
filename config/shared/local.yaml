@@ -4,4 +4,5 @@ artifacts:
 
 catalog:
   table: nitrum-fn-catalog
-  endpoint: http://127.0.0.1:8000
+  publish_lock_table: nitrum-fn-publish-lock
+  endpoint: http://127.0.0.1:4566

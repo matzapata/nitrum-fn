@@ -1,5 +1,5 @@
 catalog:
-  idempotency_table: nitrum-fn-catalog-idempotency
+  publish_lock_table: nitrum-fn-publish-lock
 
 publish:
   topic_arn: arn:aws:sns:us-east-1:000000000000:nitrum-fn-publish

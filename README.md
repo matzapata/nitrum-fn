@@ -70,49 +70,21 @@ Trust rule: only the invoke path (`host` → `InvokeFunction` → `executor`) se
 
 ## Local development (S3 + DynamoDB)
 
-Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3. Publish events fan out on SNS to an SQS compile queue. For local store testing, run [Floci](https://floci.io) (S3 + SNS + SQS on `:4566`) and DynamoDB Local; run **api** (publish), **publish-worker** (AOT), and **host** (invoke).
+Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3. Publish events fan out on SNS to an SQS compile queue. For local store testing, run [Floci](https://floci.io) (S3 + SNS + SQS + DynamoDB on `:4566`); run **api** (publish), **publish-worker** (AOT), and **host** (invoke).
 
 ```bash
-# 1. Start Floci (:4566 S3+SNS+SQS) and DynamoDB Local (:8000)
-docker compose up -d
+# 1. Start Floci (:4566) and provision the store
+docker compose up -d --remove-orphans floci
+docker compose run --rm aws-init
 
-# 2. Create the bucket, tables, topic, and queue (same shape as Terraform)
-export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
-aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://nitrum-fn
-aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
-  --table-name nitrum-fn-catalog \
-  --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
-  --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST
-aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
-  --table-name nitrum-fn-catalog-idempotency \
-  --attribute-definitions AttributeName=idempotency_key,AttributeType=S \
-  --key-schema AttributeName=idempotency_key,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST
-aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
-  --table-name nitrum-fn-catalog-idempotency \
-  --time-to-live-specification Enabled=true,AttributeName=expires_at
-aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
-  --queue-name nitrum-fn-compile \
-  --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
-QUEUE_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sqs get-queue-attributes \
-  --queue-url http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
-  --attribute-names QueueArn --query Attributes.QueueArn --output text)
-TOPIC_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sns create-topic \
-  --name nitrum-fn-publish --query TopicArn --output text)
-aws --endpoint-url http://127.0.0.1:4566 sns subscribe \
-  --topic-arn "$TOPIC_ARN" --protocol sqs \
-  --notification-endpoint "$QUEUE_ARN" \
-  --attributes RawMessageDelivery=true
-
-# 3. Run api + publish-worker + host against the emulators
+# 2. Run api + publish-worker + host against the emulators
 # `config/shared/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 cargo run -p publish-worker &
 cargo run -p api &
 cargo run -p host
 
-# 4. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
+# 3. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
 curl -X POST http://127.0.0.1:8081/invoke/hello-world -H 'content-type: application/json' -d '{}'
 ```

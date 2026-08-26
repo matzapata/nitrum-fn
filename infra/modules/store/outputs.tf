@@ -33,14 +33,14 @@ output "catalog_table_arn" {
   value       = aws_dynamodb_table.catalog.arn
 }
 
-output "idempotency_table_name" {
-  description = "DynamoDB table for publish Idempotency-Key records"
-  value       = aws_dynamodb_table.idempotency.name
+output "publish_lock_table_name" {
+  description = "DynamoDB table for per-function publish locks"
+  value       = aws_dynamodb_table.publish_lock.name
 }
 
-output "idempotency_table_arn" {
-  description = "ARN of the publish idempotency table"
-  value       = aws_dynamodb_table.idempotency.arn
+output "publish_lock_table_arn" {
+  description = "ARN of the publish lock table"
+  value       = aws_dynamodb_table.publish_lock.arn
 }
 
 output "publish_topic_arn" {

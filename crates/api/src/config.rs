@@ -27,7 +27,7 @@ pub struct ArtifactsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogConfig {
     pub table: String,
-    pub idempotency_table: String,
+    pub publish_lock_table: String,
     pub endpoint: Option<String>,
 }
 

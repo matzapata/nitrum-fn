@@ -25,15 +25,15 @@ resource "aws_dynamodb_table" "catalog" {
   }
 }
 
-resource "aws_dynamodb_table" "idempotency" {
-  name                        = local.idempotency_table_name
+resource "aws_dynamodb_table" "publish_lock" {
+  name                        = local.publish_lock_table_name
   billing_mode                = "PAY_PER_REQUEST"
   deletion_protection_enabled = var.retain
 
-  hash_key = "idempotency_key"
+  hash_key = "fn_id"
 
   attribute {
-    name = "idempotency_key"
+    name = "fn_id"
     type = "S"
   }
 

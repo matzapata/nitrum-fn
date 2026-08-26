@@ -1,20 +1,110 @@
 services:
   floci:
-    image: floci/floci:latest
+    image: floci/floci:1.5.5
+    platform: linux/amd64
     ports:
       - "4566:4566"
     volumes:
       - floci-data:/app/data
     environment:
+      AWS_DEFAULT_REGION: us-east-1
+      FLOCI_DEFAULT_REGION: us-east-1
       FLOCI_STORAGE_MODE: persistent
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
-    # Host-side e2e waits on :4566 via /dev/tcp (S3 + SQS + SNS on this port).
+    healthcheck:
+      # Match upstream Floci image (Alpine: wget, not curl).
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4566/_floci/health"]
+      interval: 10s
+      timeout: 15s
+      retries: 60
+      start_period: 120s
 
-  dynamodb:
-    image: amazon/dynamodb-local:latest
-    ports:
-      - "8000:8000"
-    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+  # One-shot: bucket, catalog tables, publish topic, compile queue.
+  aws-init:
+    image: amazon/aws-cli:2.27.50
+    depends_on:
+      floci:
+        # Poll the API in the script; Floci/JVM startup can exceed healthcheck limits.
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      FLOCI_URL: http://floci:4566
+      BUCKET: nitrum-fn
+      TABLE: nitrum-fn-catalog
+      PUBLISH_LOCK_TABLE: nitrum-fn-publish-lock
+      QUEUE_NAME: nitrum-fn-compile
+      TOPIC_NAME: nitrum-fn-publish
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Waiting for Floci to accept AWS API calls..."
+        ok=0
+        for i in $$(seq 1 180); do
+          if aws --endpoint-url=$$FLOCI_URL dynamodb list-tables >/dev/null 2>&1; then
+            ok=1
+            break
+          fi
+          sleep 1
+        done
+        if [ "$$ok" != 1 ]; then
+          echo "Timed out after 180s — check: docker compose logs floci"
+          exit 1
+        fi
+
+        if ! aws --endpoint-url=$$FLOCI_URL s3 ls "s3://$$BUCKET" >/dev/null 2>&1; then
+          aws --endpoint-url=$$FLOCI_URL s3 mb "s3://$$BUCKET" >/dev/null
+        fi
+
+        if ! aws --endpoint-url=$$FLOCI_URL dynamodb describe-table --table-name "$$TABLE" >/dev/null 2>&1; then
+          aws --endpoint-url=$$FLOCI_URL dynamodb create-table \
+            --table-name "$$TABLE" \
+            --attribute-definitions AttributeName=fn_id,AttributeType=S AttributeName=label,AttributeType=S \
+            --key-schema AttributeName=fn_id,KeyType=HASH AttributeName=label,KeyType=RANGE \
+            --billing-mode PAY_PER_REQUEST >/dev/null
+          aws --endpoint-url=$$FLOCI_URL dynamodb wait table-exists --table-name "$$TABLE"
+        fi
+
+        if ! aws --endpoint-url=$$FLOCI_URL dynamodb describe-table --table-name "$$PUBLISH_LOCK_TABLE" >/dev/null 2>&1; then
+          aws --endpoint-url=$$FLOCI_URL dynamodb create-table \
+            --table-name "$$PUBLISH_LOCK_TABLE" \
+            --attribute-definitions AttributeName=fn_id,AttributeType=S \
+            --key-schema AttributeName=fn_id,KeyType=HASH \
+            --billing-mode PAY_PER_REQUEST >/dev/null
+          aws --endpoint-url=$$FLOCI_URL dynamodb wait table-exists --table-name "$$PUBLISH_LOCK_TABLE"
+        fi
+        aws --endpoint-url=$$FLOCI_URL dynamodb update-time-to-live \
+          --table-name "$$PUBLISH_LOCK_TABLE" \
+          --time-to-live-specification Enabled=true,AttributeName=expires_at >/dev/null
+
+        queue_url="$$(aws --endpoint-url=$$FLOCI_URL sqs create-queue \
+          --queue-name "$$QUEUE_NAME" \
+          --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20 \
+          --query QueueUrl --output text)"
+        queue_arn="$$(aws --endpoint-url=$$FLOCI_URL sqs get-queue-attributes \
+          --queue-url "$$queue_url" \
+          --attribute-names QueueArn \
+          --query Attributes.QueueArn --output text)"
+        topic_arn="$$(aws --endpoint-url=$$FLOCI_URL sns create-topic \
+          --name "$$TOPIC_NAME" \
+          --query TopicArn --output text)"
+        sub="$$(aws --endpoint-url=$$FLOCI_URL sns list-subscriptions-by-topic \
+          --topic-arn "$$topic_arn" \
+          --query "Subscriptions[?Endpoint=='$$queue_arn'].SubscriptionArn" \
+          --output text)"
+        if [ -z "$$sub" ] || [ "$$sub" = "None" ]; then
+          aws --endpoint-url=$$FLOCI_URL sns subscribe \
+            --topic-arn "$$topic_arn" \
+            --protocol sqs \
+            --notification-endpoint "$$queue_arn" \
+            --attributes RawMessageDelivery=true >/dev/null
+        fi
+
+        echo "aws-init (Floci seed) done."
+    restart: "no"
 
 volumes:
   floci-data:

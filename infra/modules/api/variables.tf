@@ -43,14 +43,14 @@ variable "catalog_table_arn" {
   description = "ARN of the catalog table."
 }
 
-variable "idempotency_table_name" {
+variable "publish_lock_table_name" {
   type        = string
-  description = "DynamoDB table for publish Idempotency-Key records."
+  description = "DynamoDB table for per-function publish locks."
 }
 
-variable "idempotency_table_arn" {
+variable "publish_lock_table_arn" {
   type        = string
-  description = "ARN of the publish idempotency table."
+  description = "ARN of the publish lock table."
 }
 
 variable "publish_topic_arn" {

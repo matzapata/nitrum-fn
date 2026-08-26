@@ -59,26 +59,6 @@ mod tests {
                 assert_eq!(args.name, "echo");
                 assert_eq!(args.url, "http://127.0.0.1:8080");
                 assert_eq!(args.timeout_secs, 180);
-                assert!(args.idempotency_key.is_none());
-            }
-        }
-    }
-
-    #[test]
-    fn parses_idempotency_key() {
-        let cli = Cli::try_parse_from([
-            "nitrum-fn",
-            "deploy",
-            "./echo.wasm",
-            "--name",
-            "echo",
-            "--idempotency-key",
-            "retry-1",
-        ])
-        .expect("parse");
-        match cli.command {
-            Commands::Deploy(args) => {
-                assert_eq!(args.idempotency_key.as_deref(), Some("retry-1"));
             }
         }
     }

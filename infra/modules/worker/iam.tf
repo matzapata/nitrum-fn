@@ -72,6 +72,17 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
+    sid    = "PublishLockReadWrite"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [var.publish_lock_table_arn]
+  }
+
+  statement {
     sid    = "CompileQueue"
     effect = "Allow"
     actions = [

@@ -61,13 +61,14 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
-    sid    = "IdempotencyReadWrite"
+    sid    = "PublishLockReadWrite"
     effect = "Allow"
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
     ]
-    resources = [var.idempotency_table_arn]
+    resources = [var.publish_lock_table_arn]
   }
 
   statement {
