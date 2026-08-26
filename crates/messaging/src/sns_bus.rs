@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use aws_sdk_sns::Client;
 use domain::PublishQueuedEvent;
 
-/// Publishes `PublishQueuedEvent` to an SNS topic (cloud fan-out).
+/// Publishes `PublishQueuedEvent` to an SNS topic (SQS subscribers compile).
 pub struct SnsPublishBus {
     client: Client,
     topic_arn: String,

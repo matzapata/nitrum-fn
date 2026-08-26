@@ -64,7 +64,7 @@ jobs:
         with:
           shared-key: rust
           cache-on-failure: true
-      - name: Start Floci (S3+SQS) and DynamoDB Local
+      - name: Start Floci (S3+SNS+SQS) and DynamoDB Local
         run: docker compose up -d
       - name: Wait for emulators
         run: |
@@ -86,8 +86,8 @@ jobs:
           wait_tcp 127.0.0.1 8000 "DynamoDB Local"
       - name: Test
         env:
-          NITRUM_FN_S3_ENDPOINT: http://127.0.0.1:4566
-          NITRUM_FN_DDB_ENDPOINT: http://127.0.0.1:8000
+          NITRUM_FN_ARTIFACTS__ENDPOINT: http://127.0.0.1:4566
+          NITRUM_FN_CATALOG__ENDPOINT: http://127.0.0.1:8000
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
           AWS_ACCESS_KEY_ID: test

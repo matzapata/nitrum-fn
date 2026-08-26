@@ -15,8 +15,8 @@ use crate::state::{ApiState, CatalogState, PublishState};
 use application::ports::FunctionCatalog;
 use application::PublishFunction;
 
-/// Health + catalog GET. Safe to mount without a publish bus (enclave / seed-only host).
-pub fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
+/// Health + catalog GET.
+fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
     Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/functions/{name}", get(get_function))
@@ -25,7 +25,7 @@ pub fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
 }
 
 /// PUT /functions/{name} — requires a publish bus.
-pub fn publish_router(usecase: Arc<PublishFunction>) -> Router {
+fn publish_router(usecase: Arc<PublishFunction>) -> Router {
     Router::new()
         .route("/functions/{name}", put(publish))
         .layer(DefaultBodyLimit::max(MAX_WASM_BYTES))

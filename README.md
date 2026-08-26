@@ -70,13 +70,13 @@ Trust rule: only the invoke path (`host` → `InvokeFunction` → `executor`) se
 
 ## Local development (S3 + DynamoDB)
 
-Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3. Publish events fan out on SNS to an SQS compile queue. For local store testing, run [Floci](https://floci.io) (S3 + SQS on `:4566`) and DynamoDB Local; run `publish-worker` alongside the host.
+Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3. Publish events fan out on SNS to an SQS compile queue. For local store testing, run [Floci](https://floci.io) (S3 + SNS + SQS on `:4566`) and DynamoDB Local; run **api** (publish), **publish-worker** (AOT), and **host** (invoke).
 
 ```bash
-# 1. Start Floci (:4566 S3+SQS) and DynamoDB Local (:8000)
+# 1. Start Floci (:4566 S3+SNS+SQS) and DynamoDB Local (:8000)
 docker compose up -d
 
-# 2. Create the bucket, tables, and queue (same shape as Terraform)
+# 2. Create the bucket, tables, topic, and queue (same shape as Terraform)
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://nitrum-fn
 aws --endpoint-url http://127.0.0.1:8000 dynamodb create-table \
@@ -95,21 +95,26 @@ aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
 aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
   --queue-name nitrum-fn-compile \
   --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
+QUEUE_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sqs get-queue-attributes \
+  --queue-url http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
+  --attribute-names QueueArn --query Attributes.QueueArn --output text)
+TOPIC_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sns create-topic \
+  --name nitrum-fn-publish --query TopicArn --output text)
+aws --endpoint-url http://127.0.0.1:4566 sns subscribe \
+  --topic-arn "$TOPIC_ARN" --protocol sqs \
+  --notification-endpoint "$QUEUE_ARN" \
+  --attributes RawMessageDelivery=true
 
-# 3. Run publish-worker + host against the emulators
-export NITRUM_FN_S3_BUCKET=nitrum-fn \
-  NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
-  NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
-  NITRUM_FN_SQS_QUEUE_URL=http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
-  NITRUM_FN_SQS_ENDPOINT=http://127.0.0.1:4566 \
-  AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+# 3. Run api + publish-worker + host against the emulators
+# `config/{host,worker,api}/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
+export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 cargo run -p publish-worker &
+cargo run -p api &
 cargo run -p host
 
-# 4. Deploy + invoke (CLI polls until the worker catalogs the function)
+# 4. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
-curl -X POST http://127.0.0.1:8080/invoke/hello-world -H 'content-type: application/json' -d '{}'
+curl -X POST http://127.0.0.1:8081/invoke/hello-world -H 'content-type: application/json' -d '{}'
 ```
 
 End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).

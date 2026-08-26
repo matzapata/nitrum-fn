@@ -6,7 +6,7 @@ How to develop, test, and run a staging e2e. Product context lives in [`README.m
 
 - Rust **1.95** (`rust-toolchain.toml`; rustup installs it)
 - Docker (Compose for local S3/DynamoDB; Buildx/QEMU on Apple Silicon for `linux/amd64` images)
-- AWS CLI (create bucket/tables/queue against Floci + DynamoDB Local; Terraform owns cloud)
+- AWS CLI (create bucket/tables/topic/queue against Floci + DynamoDB Local; Terraform owns cloud)
 - `wasm32-unknown-unknown` for guest examples: `rustup target add wasm32-unknown-unknown`
 - **[Nitrum CLI](https://github.com/matzapata/nitrum)** for EIF build (`nitrum build`). Staging also needs AWS credentials, Terraform ≥ 1.5, and a state backend (see [infra README](infra/README.md#prerequisites-once-per-account)).
 
@@ -23,25 +23,25 @@ No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed 
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
+CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, workspace tests (with Floci S3+SNS+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo audit
 docker compose up -d
-NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
+NITRUM_FN_ARTIFACTS__ENDPOINT=http://127.0.0.1:4566 \
+NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:8000 \
 AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
   cargo test --workspace --all-targets
 bash tests/e2e/local.sh
 ```
 
-`local.sh` is **local only**: merged host + publish-worker + emulators, not the cloud split.
+`local.sh` runs the same split as cloud: **api** (publish/catalog) + **publish-worker** (AOT) + **host** (invoke) against emulators.
 
-## Local host
+## Local stack
 
-Publish is async: the host enqueues to Floci **SQS**; **publish-worker** AOT-compiles. Start emulators (Floci + DynamoDB Local), create the bucket/tables/queue, then worker + host:
+Publish is async: the **api** publishes to Floci **SNS**, which fans out to **SQS**; **publish-worker** AOT-compiles; the **host** invokes from the catalog + S3 artifacts. Start emulators (Floci + DynamoDB Local), create the bucket/tables/topic/queue, then api + worker + host:
 
 ```bash
 docker compose up -d
@@ -64,16 +64,21 @@ aws --endpoint-url http://127.0.0.1:8000 dynamodb update-time-to-live \
 aws --endpoint-url http://127.0.0.1:4566 sqs create-queue \
   --queue-name nitrum-fn-compile \
   --attributes VisibilityTimeout=300,ReceiveMessageWaitTimeSeconds=20
+QUEUE_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sqs get-queue-attributes \
+  --queue-url http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
+  --attribute-names QueueArn --query Attributes.QueueArn --output text)
+TOPIC_ARN=$(aws --endpoint-url http://127.0.0.1:4566 sns create-topic \
+  --name nitrum-fn-publish --query TopicArn --output text)
+aws --endpoint-url http://127.0.0.1:4566 sns subscribe \
+  --topic-arn "$TOPIC_ARN" --protocol sqs \
+  --notification-endpoint "$QUEUE_ARN" \
+  --attributes RawMessageDelivery=true
 
-export NITRUM_FN_S3_BUCKET=nitrum-fn \
-  NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
-  NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
-  NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
-  NITRUM_FN_SQS_QUEUE_URL=http://127.0.0.1:4566/000000000000/nitrum-fn-compile \
-  NITRUM_FN_SQS_ENDPOINT=http://127.0.0.1:4566 \
-  AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+# `config/{host,worker,api}/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
+export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 
 cargo run -p publish-worker &
+cargo run -p api &
 cargo run -p host
 ```
 
@@ -81,7 +86,7 @@ In another terminal:
 
 ```bash
 bash examples/hello-world/deploy-local.sh
-curl -X POST http://127.0.0.1:8080/invoke/hello-world \
+curl -X POST http://127.0.0.1:8081/invoke/hello-world \
   -H 'content-type: application/json' -d '{}'
 ```
 

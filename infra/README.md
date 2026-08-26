@@ -83,7 +83,7 @@ eif_image_sha384  = "<PCR0 hex>"
 
 3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG does not launch until the object exists.
 
-SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_S3_BUCKET` and `NITRUM_FN_DDB_TABLE` so Nitrum can inject them into the enclave. The host does not need SNS/SQS in the enclave (publish is the Fargate API).
+SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_ENV=prod`, `NITRUM_FN_ARTIFACTS__BUCKET`, and `NITRUM_FN_CATALOG__TABLE` so Nitrum can inject them into the enclave. The host does not need SNS/SQS or the idempotency table in the enclave (publish is the Fargate API).
 
 Invoke (`-k` because the enclave cert is self-signed):
 

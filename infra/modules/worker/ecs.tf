@@ -22,9 +22,10 @@ resource "aws_ecs_task_definition" "worker" {
       image     = var.image
       essential = true
       environment = [
-        { name = "NITRUM_FN_S3_BUCKET", value = var.artifacts_bucket_name },
-        { name = "NITRUM_FN_DDB_TABLE", value = var.catalog_table_name },
-        { name = "NITRUM_FN_SQS_QUEUE_URL", value = var.compile_queue_url },
+        { name = "NITRUM_FN_ENV", value = "prod" },
+        { name = "NITRUM_FN_ARTIFACTS__BUCKET", value = var.artifacts_bucket_name },
+        { name = "NITRUM_FN_CATALOG__TABLE", value = var.catalog_table_name },
+        { name = "NITRUM_FN_COMPILE__QUEUE_URL", value = var.compile_queue_url },
         { name = "AWS_REGION", value = data.aws_region.current.name },
         { name = "OTEL_SERVICE_NAME", value = "nitrum-fn-publish-worker" },
       ]

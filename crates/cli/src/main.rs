@@ -5,7 +5,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(name = "nitrum-fn")]
 #[command(
-    about = "Deploy WASM functions to a nitrum-fn host",
+    about = "Deploy WASM functions to a nitrum-fn api",
     long_about = None
 )]
 struct Cli {

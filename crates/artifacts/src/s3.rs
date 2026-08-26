@@ -140,7 +140,7 @@ mod tests {
     use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 
     async fn s3_client() -> Option<Client> {
-        let endpoint = std::env::var("NITRUM_FN_S3_ENDPOINT").ok()?;
+        let endpoint = std::env::var("NITRUM_FN_ARTIFACTS__ENDPOINT").ok()?;
         let sdk = crate::load_test_aws_config().await;
         let conf = S3ConfigBuilder::from(&sdk)
             .endpoint_url(endpoint)
@@ -164,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn put_get_wasm_and_cwasm() {
         let Some(client) = s3_client().await else {
-            eprintln!("skip: NITRUM_FN_S3_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_ARTIFACTS__ENDPOINT not set");
             return;
         };
         let bucket = format!(
@@ -195,7 +195,7 @@ mod tests {
     #[tokio::test]
     async fn missing_artifact_is_artifact_missing() {
         let Some(client) = s3_client().await else {
-            eprintln!("skip: NITRUM_FN_S3_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_ARTIFACTS__ENDPOINT not set");
             return;
         };
         let bucket = format!(

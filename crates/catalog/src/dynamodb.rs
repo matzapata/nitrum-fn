@@ -142,7 +142,7 @@ mod tests {
     };
 
     async fn ddb_client() -> Option<Client> {
-        let endpoint = std::env::var("NITRUM_FN_DDB_ENDPOINT").ok()?;
+        let endpoint = std::env::var("NITRUM_FN_CATALOG__ENDPOINT").ok()?;
         let sdk = crate::load_test_aws_config().await;
         let conf = DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build();
         Some(Client::from_conf(conf))
@@ -198,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_resolve_list() {
         let Some(client) = ddb_client().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let table = format!(
@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn missing_is_not_found() {
         let Some(client) = ddb_client().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let table = format!(
@@ -255,7 +255,7 @@ mod tests {
     #[tokio::test]
     async fn stale_upsert_does_not_clobber() {
         let Some(client) = ddb_client().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let table = format!(

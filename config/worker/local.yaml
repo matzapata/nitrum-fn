@@ -1,0 +1,11 @@
+artifacts:
+  bucket: nitrum-fn
+  endpoint: http://127.0.0.1:4566
+
+catalog:
+  table: nitrum-fn-catalog
+  endpoint: http://127.0.0.1:8000
+
+compile:
+  queue_url: http://127.0.0.1:4566/000000000000/nitrum-fn-compile
+  endpoint: http://127.0.0.1:4566

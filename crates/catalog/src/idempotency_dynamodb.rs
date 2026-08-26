@@ -228,7 +228,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     async fn ddb_client() -> Option<Client> {
-        let endpoint = std::env::var("NITRUM_FN_DDB_ENDPOINT").ok()?;
+        let endpoint = std::env::var("NITRUM_FN_CATALOG__ENDPOINT").ok()?;
         let sdk = crate::load_test_aws_config().await;
         let conf = DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build();
         Some(Client::from_conf(conf))
@@ -287,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn claim_complete_replay_and_conflict() {
         let Some((store, _, _)) = store().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let key = IdempotencyKey::new("retry-1").unwrap();
@@ -310,7 +310,7 @@ mod tests {
     #[tokio::test]
     async fn expired_row_can_be_overwritten() {
         let Some((store, client, table)) = store().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let key = IdempotencyKey::new("retry-1").unwrap();
@@ -339,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn same_key_different_functions_do_not_collide() {
         let Some((store, _, _)) = store().await else {
-            eprintln!("skip: NITRUM_FN_DDB_ENDPOINT not set");
+            eprintln!("skip: NITRUM_FN_CATALOG__ENDPOINT not set");
             return;
         };
         let key = IdempotencyKey::new("retry-1").unwrap();

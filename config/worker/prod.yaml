@@ -1,0 +1,7 @@
+# Resource names and queue URL come from ECS env.
+artifacts:
+  endpoint: null
+catalog:
+  endpoint: null
+compile:
+  endpoint: null

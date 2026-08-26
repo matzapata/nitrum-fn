@@ -1,0 +1,12 @@
+artifacts:
+  bucket: nitrum-fn
+  endpoint: http://127.0.0.1:4566
+
+catalog:
+  table: nitrum-fn-catalog
+  idempotency_table: nitrum-fn-catalog-idempotency
+  endpoint: http://127.0.0.1:8000
+
+publish:
+  topic_arn: arn:aws:sns:us-east-1:000000000000:nitrum-fn-publish
+  endpoint: http://127.0.0.1:4566

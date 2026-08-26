@@ -1,0 +1,7 @@
+# Resource names come from ECS env. This overlay drops emulator endpoints.
+artifacts:
+  endpoint: null
+catalog:
+  endpoint: null
+publish:
+  endpoint: null

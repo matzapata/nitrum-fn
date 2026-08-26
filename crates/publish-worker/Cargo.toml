@@ -17,7 +17,9 @@ domain = { workspace = true }
 executor = { workspace = true }
 messaging = { workspace = true }
 
+config = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
 aws-sdk-s3 = { workspace = true }

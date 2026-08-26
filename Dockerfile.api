@@ -30,9 +30,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/nitrum-fn-api /usr/local/bin/nitrum-fn-api
+COPY config/api/base.yaml config/api/prod.yaml /app/config/api/
 
+WORKDIR /app
 USER 65534:65534
 EXPOSE 8080
-ENV NITRUM_FN_PORT=8080
+ENV NITRUM_FN_ENV=prod
+ENV NITRUM_FN_SERVER__PORT=8080
 
 CMD ["nitrum-fn-api"]

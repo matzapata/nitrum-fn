@@ -4,7 +4,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 use domain::{FunctionId, InvokeRequest, VersionLabel, MAX_INVOKE_BODY_BYTES};
 use runtime::{decode_response, encode_request, Request as FnRequest};
@@ -14,10 +14,9 @@ use crate::error::HttpError;
 use crate::state::AppState;
 use crate::telemetry::{outcome_for_error, record_invoke};
 
-/// `/healthz` is provided by `catalog_router`, always merged alongside this
-/// router in `main.rs` — defining it here too would panic on `Router::merge`.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/invoke/{name}", post(invoke))
         .layer(DefaultBodyLimit::max(MAX_INVOKE_BODY_BYTES))
         .layer(TraceLayer::new_for_http())

@@ -1,8 +1,8 @@
-//! Management HTTP routes. Merged into the host binary for the local MVP.
+//! Management HTTP routes (publish + catalog).
 
 mod error;
 mod http;
 mod state;
 
-pub use http::{catalog_router, publish_router, router};
+pub use http::router;
 pub use state::ApiState;

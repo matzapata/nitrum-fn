@@ -31,30 +31,30 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = WorkerConfig::from_env().context("load worker config")?;
-    let queue_url = config.sqs_queue_url.clone();
+    let config = WorkerConfig::load().context("load worker config")?;
+    let queue_url = config.compile.queue_url.clone();
 
-    let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
-    let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
+    let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
+    let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
     let catalog: Arc<dyn FunctionCatalog> =
-        Arc::new(DynamoDbCatalog::new(ddb, config.ddb_table.clone()));
+        Arc::new(DynamoDbCatalog::new(ddb, config.catalog.table.clone()));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
         s3,
-        config.s3_bucket.clone(),
-        "artifacts",
+        config.artifacts.bucket.clone(),
+        config.artifacts.prefix.clone(),
     ));
 
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
     let compile = Arc::new(CompileQueuedFunction::new(catalog, artifacts, runner));
 
-    let sqs = build_sqs_client(config.sqs_endpoint.as_deref()).await?;
+    let sqs = build_sqs_client(config.compile.endpoint.as_deref()).await?;
     let queue: Arc<dyn CompileQueue> =
         Arc::new(SqsCompileConsumer::new(sqs, queue_url.clone()).with_wait_seconds(20));
 
     info!(
         %queue_url,
-        endpoint = ?config.sqs_endpoint,
+        endpoint = ?config.compile.endpoint,
         "nitrum-fn-publish-worker listening"
     );
 
