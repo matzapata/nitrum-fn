@@ -32,8 +32,11 @@ impl IntoResponse for HttpError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
+        if self.0.is_internal() {
+            tracing::error!(error = %self.0, "request failed");
+        }
         let body = Json(ErrorBody {
-            error: self.0.to_string(),
+            error: self.0.public_message(),
         });
         (status, body).into_response()
     }
@@ -62,5 +65,20 @@ mod tests {
     async fn trap_maps_to_500() {
         let res = HttpError(AppError::Trap("unreachable".into())).into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(res.into_body(), 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("internal error"), "{text}");
+        assert!(!text.contains("unreachable"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn storage_does_not_leak_internals() {
+        let res =
+            HttpError(AppError::Storage("AccessDeniedException secret".into())).into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(res.into_body(), 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("internal error"), "{text}");
+        assert!(!text.contains("AccessDeniedException"), "{text}");
     }
 }

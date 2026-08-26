@@ -3,28 +3,30 @@
 //! | Group | Maps to |
 //! |---|---|
 //! | `publish` | store `.wasm` + enqueue (in-memory bus) |
-//! | `invoke/precompiled` | Invoke with `.cwasm` on disk (deserialize each call) |
+//! | `invoke/precompiled` | Invoke with in-memory `.cwasm` (deserialize each call) |
 //! | `invoke/cranelift` | `FunctionRunner::run` from raw `.wasm` |
 //!
 //! ```text
 //! cargo bench -p executor --bench precompile
 //! ```
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishBus};
+use application::ports::{
+    ArtifactStore, FunctionCatalog, FunctionRunner, IdempotencyClaim, IdempotencyRecord,
+    PublishBus, PublishIdempotency,
+};
 use application::AppError;
 use application::{CompileQueuedFunction, InvokeFunction, PublishFunction};
-use artifacts::FilesystemArtifactStore;
 use async_trait::async_trait;
-use catalog::InMemoryCatalog;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use domain::{
-    ContentHash, FunctionId, InvokeRequest, PublishQueuedEvent, PublishRequest, VersionLabel,
+    ContentHash, FunctionId, FunctionVersion, IdempotencyKey, InvokeRequest, PublishQueuedEvent,
+    PublishRequest, VersionLabel,
 };
 use executor::WasmtimeRunner;
 use runtime::{encode_request, Request as FnRequest};
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 
@@ -77,28 +79,154 @@ impl PublishBus for MemBus {
     }
 }
 
+struct MemArtifacts {
+    wasm: StdMutex<HashMap<String, Vec<u8>>>,
+    compiled: StdMutex<HashMap<String, Vec<u8>>>,
+}
+
+impl MemArtifacts {
+    fn new() -> Self {
+        Self {
+            wasm: StdMutex::new(HashMap::new()),
+            compiled: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    fn drop_compiled(&self, hash: &ContentHash) {
+        self.compiled.lock().unwrap().remove(&hash.to_hex());
+    }
+}
+
+#[async_trait]
+impl ArtifactStore for MemArtifacts {
+    async fn put(&self, wasm: &[u8]) -> Result<ContentHash, AppError> {
+        let hash = ContentHash::from_bytes(wasm);
+        self.wasm
+            .lock()
+            .unwrap()
+            .insert(hash.to_hex(), wasm.to_vec());
+        Ok(hash)
+    }
+
+    async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
+        self.wasm
+            .lock()
+            .unwrap()
+            .get(&hash.to_hex())
+            .cloned()
+            .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
+    }
+
+    async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
+        self.compiled
+            .lock()
+            .unwrap()
+            .insert(hash.to_hex(), compiled.to_vec());
+        Ok(())
+    }
+
+    async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
+        self.compiled
+            .lock()
+            .unwrap()
+            .get(&hash.to_hex())
+            .cloned()
+            .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
+    }
+}
+
+struct MemCatalog {
+    entries: StdMutex<HashMap<(String, String), ContentHash>>,
+}
+
+impl MemCatalog {
+    fn new() -> Self {
+        Self {
+            entries: StdMutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl FunctionCatalog for MemCatalog {
+    async fn upsert(
+        &self,
+        id: &FunctionId,
+        label: &VersionLabel,
+        hash: ContentHash,
+        _queued_at_ms: u64,
+    ) -> Result<bool, AppError> {
+        self.entries
+            .lock()
+            .unwrap()
+            .insert((id.as_str().to_string(), label.as_str().to_string()), hash);
+        Ok(true)
+    }
+
+    async fn resolve(
+        &self,
+        id: &FunctionId,
+        label: &VersionLabel,
+    ) -> Result<FunctionVersion, AppError> {
+        let hash = self
+            .entries
+            .lock()
+            .unwrap()
+            .get(&(id.as_str().to_string(), label.as_str().to_string()))
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(format!("{id}@{label}")))?;
+        Ok(FunctionVersion {
+            id: id.clone(),
+            label: label.clone(),
+            content_hash: hash,
+        })
+    }
+
+    async fn list(&self) -> Result<Vec<FunctionVersion>, AppError> {
+        Ok(vec![])
+    }
+}
+
+struct NoopIdempotency;
+
+#[async_trait]
+impl PublishIdempotency for NoopIdempotency {
+    async fn claim(
+        &self,
+        _key: &IdempotencyKey,
+        _record: &IdempotencyRecord,
+    ) -> Result<IdempotencyClaim, AppError> {
+        Ok(IdempotencyClaim::Proceed)
+    }
+
+    async fn complete(
+        &self,
+        _key: &IdempotencyKey,
+        _record: &IdempotencyRecord,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
 struct BenchEnv {
-    _dir: TempDir,
     rt: Runtime,
     runner: Arc<WasmtimeRunner>,
     bus: Arc<MemBus>,
+    artifacts: Arc<MemArtifacts>,
     compile: Arc<CompileQueuedFunction>,
     publish: Arc<PublishFunction>,
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
     hash: ContentHash,
-    cwasm_path: std::path::PathBuf,
     payload: Vec<u8>,
     function: FunctionId,
 }
 
 impl BenchEnv {
     fn new() -> Self {
-        let dir = TempDir::new().expect("tempdir");
         let rt = Runtime::new().expect("tokio runtime");
-        let artifact_dir = dir.path().join("artifacts");
-        let artifacts = Arc::new(FilesystemArtifactStore::new(artifact_dir.clone()));
-        let catalog = Arc::new(InMemoryCatalog::new());
+        let artifacts = Arc::new(MemArtifacts::new());
+        let catalog = Arc::new(MemCatalog::new());
         let runner = Arc::new(WasmtimeRunner::new().expect("runner"));
         let bus = Arc::new(MemBus::new());
         let compile = Arc::new(CompileQueuedFunction::new(
@@ -109,12 +237,11 @@ impl BenchEnv {
         let publish = Arc::new(PublishFunction::new(
             artifacts.clone() as Arc<dyn ArtifactStore>,
             bus.clone() as Arc<dyn PublishBus>,
-            Arc::new(catalog::InMemoryPublishIdempotency::new())
-                as Arc<dyn application::ports::PublishIdempotency>,
+            Arc::new(NoopIdempotency) as Arc<dyn PublishIdempotency>,
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
-            artifacts as Arc<dyn ArtifactStore>,
+            artifacts.clone() as Arc<dyn ArtifactStore>,
             runner.clone() as Arc<dyn FunctionRunner>,
         ));
         let wasm = load_hello_world();
@@ -133,16 +260,15 @@ impl BenchEnv {
         }
 
         Self {
-            _dir: dir,
             rt,
             runner,
             bus,
+            artifacts,
             compile,
             publish,
             invoke,
             wasm,
             hash: published.content_hash.clone(),
-            cwasm_path: artifact_dir.join(format!("{}.cwasm", published.content_hash.to_hex())),
             payload,
             function,
         }
@@ -187,7 +313,7 @@ fn host_path_benches(c: &mut Criterion) {
                     env.hash.to_hex(),
                     env.wasm.len(),
                 );
-                let _ = std::fs::remove_file(&env.cwasm_path);
+                env.artifacts.drop_compiled(&env.hash);
                 let res = env.rt.block_on(env.compile.execute(&event));
                 res.expect("compile");
                 black_box(());

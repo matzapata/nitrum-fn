@@ -111,13 +111,16 @@ async fn get_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use application::ports::{ArtifactStore, PublishBus};
+    use application::ports::{
+        evaluate_claim, ArtifactStore, IdempotencyClaim, IdempotencyRecord, IdempotencyStatus,
+        PublishBus, PublishIdempotency,
+    };
     use application::AppError;
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use catalog::InMemoryPublishIdempotency;
     use domain::{ContentHash, PublishQueuedEvent};
+    use std::collections::HashMap;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
@@ -163,12 +166,64 @@ mod tests {
         }
     }
 
+    struct MemIdempotency {
+        records: Mutex<HashMap<String, IdempotencyRecord>>,
+    }
+
+    impl MemIdempotency {
+        fn new() -> Self {
+            Self {
+                records: Mutex::new(HashMap::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PublishIdempotency for MemIdempotency {
+        async fn claim(
+            &self,
+            key: &IdempotencyKey,
+            record: &IdempotencyRecord,
+        ) -> Result<IdempotencyClaim, AppError> {
+            let mut records = self.records.lock().unwrap();
+            let sk = format!("{}#{}", record.function.as_str(), key.as_str());
+            if let Some(existing) = records.get(&sk) {
+                return evaluate_claim(existing, record);
+            }
+            records.insert(
+                sk,
+                IdempotencyRecord {
+                    status: IdempotencyStatus::Pending,
+                    ..record.clone()
+                },
+            );
+            Ok(IdempotencyClaim::Proceed)
+        }
+
+        async fn complete(
+            &self,
+            key: &IdempotencyKey,
+            record: &IdempotencyRecord,
+        ) -> Result<(), AppError> {
+            let mut records = self.records.lock().unwrap();
+            let sk = format!("{}#{}", record.function.as_str(), key.as_str());
+            records.insert(
+                sk,
+                IdempotencyRecord {
+                    status: IdempotencyStatus::Completed,
+                    ..record.clone()
+                },
+            );
+            Ok(())
+        }
+    }
+
     fn publish_app() -> (Router, Arc<MemBus>) {
         let bus = Arc::new(MemBus::new());
         let usecase = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts),
             bus.clone(),
-            Arc::new(InMemoryPublishIdempotency::new()),
+            Arc::new(MemIdempotency::new()),
         ));
         (publish_router(usecase), bus)
     }
@@ -211,7 +266,7 @@ mod tests {
         let usecase = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts),
             Arc::new(MemBus::new()),
-            Arc::new(InMemoryPublishIdempotency::new()),
+            Arc::new(MemIdempotency::new()),
         ));
         let first = publish_router(usecase.clone())
             .oneshot(put(Some("retry-1"), b"\0asm one"))
@@ -231,7 +286,7 @@ mod tests {
         let usecase = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts),
             bus.clone(),
-            Arc::new(InMemoryPublishIdempotency::new()),
+            Arc::new(MemIdempotency::new()),
         ));
         let first = publish_router(usecase.clone())
             .oneshot(put(Some("retry-1"), b"\0asm one"))

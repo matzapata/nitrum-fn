@@ -23,13 +23,14 @@ cli = { path = "crates/cli" }
 anyhow = "1"
 async-trait = "0.1"
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
-aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
-aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
-aws-sdk-sns = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
-aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sns = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio"] }
+# Hyper 1.x + rustls 0.23 + ring (not the legacy rustls 0.21 stack, and not aws-lc).
+aws-smithy-http-client = { version = "1", default-features = false, features = ["rustls-ring"] }
 axum = "0.8"
 criterion = "0.5"
-tempfile = "3"
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -51,5 +52,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opentelemetry = { version = "0.29", features = ["metrics"] }
 opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "metrics"] }
 opentelemetry-otlp = { version = "0.29", default-features = false, features = ["metrics", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
-wasmtime = "31"
+# 36.0.14 is the patched 36.x line (37–45 omit some advisories; 46+ is a larger API jump).
+wasmtime = "36.0.14"
 wat = "1"

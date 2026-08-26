@@ -136,7 +136,6 @@ impl FunctionCatalog for DynamoDbCatalog {
 mod tests {
     use super::*;
     use application::ports::FunctionCatalog;
-    use aws_config::BehaviorVersion;
     use aws_sdk_dynamodb::config::Builder as DdbConfigBuilder;
     use aws_sdk_dynamodb::types::{
         AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
@@ -144,7 +143,7 @@ mod tests {
 
     async fn ddb_client() -> Option<Client> {
         let endpoint = std::env::var("NITRUM_FN_DDB_ENDPOINT").ok()?;
-        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk = crate::load_test_aws_config().await;
         let conf = DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build();
         Some(Client::from_conf(conf))
     }

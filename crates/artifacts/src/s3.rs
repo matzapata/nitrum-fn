@@ -137,12 +137,11 @@ impl ArtifactStore for S3ArtifactStore {
 mod tests {
     use super::*;
     use application::ports::ArtifactStore;
-    use aws_config::BehaviorVersion;
     use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 
     async fn s3_client() -> Option<Client> {
         let endpoint = std::env::var("NITRUM_FN_S3_ENDPOINT").ok()?;
-        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk = crate::load_test_aws_config().await;
         let conf = S3ConfigBuilder::from(&sdk)
             .endpoint_url(endpoint)
             .force_path_style(true)

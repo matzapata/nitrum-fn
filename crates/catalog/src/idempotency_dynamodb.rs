@@ -313,14 +313,13 @@ impl PublishIdempotency for DynamoDbPublishIdempotency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_config::BehaviorVersion;
     use aws_sdk_dynamodb::config::Builder as DdbConfigBuilder;
     use domain::FunctionId;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     async fn ddb_client() -> Option<Client> {
         let endpoint = std::env::var("NITRUM_FN_DDB_ENDPOINT").ok()?;
-        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk = crate::load_test_aws_config().await;
         let conf = DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build();
         Some(Client::from_conf(conf))
     }

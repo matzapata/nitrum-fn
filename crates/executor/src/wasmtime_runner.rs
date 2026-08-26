@@ -74,10 +74,7 @@ impl WasmtimeRunner {
             .memories(1)
             .tables(1)
             .build();
-        let mut store = Store::new(
-            &self.engine,
-            StoreData { limits },
-        );
+        let mut store = Store::new(&self.engine, StoreData { limits });
         store.limiter(|data| &mut data.limits);
         store.epoch_deadline_trap();
         store.set_epoch_deadline(self.epoch_deadline_ticks());
@@ -102,11 +99,7 @@ impl WasmtimeRunner {
         }
     }
 
-    fn invoke_sync(
-        &self,
-        module: &Module,
-        input: &[u8],
-    ) -> Result<Vec<u8>, AppError> {
+    fn invoke_sync(&self, module: &Module, input: &[u8]) -> Result<Vec<u8>, AppError> {
         if input.len() > MAX_INVOKE_BODY_BYTES {
             return Err(AppError::PayloadTooLarge(format!(
                 "invoke input {} bytes exceeds max {MAX_INVOKE_BODY_BYTES}",

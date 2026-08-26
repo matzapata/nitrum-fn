@@ -56,8 +56,7 @@ wait_tcp() {
 }
 
 common_env() {
-  export NITRUM_FN_STORE=aws \
-    NITRUM_FN_S3_BUCKET="$BUCKET" \
+  export NITRUM_FN_S3_BUCKET="$BUCKET" \
     NITRUM_FN_S3_ENDPOINT="$FLOCI_URL" \
     NITRUM_FN_S3_CREATE_BUCKET=true \
     NITRUM_FN_DDB_TABLE="$TABLE" \
@@ -91,7 +90,6 @@ WORKER_PID=$!
 
 echo "==> start host on :${PORT} (S3 artifacts, DynamoDB catalog, Floci SQS publish)"
 NITRUM_FN_PORT="$PORT" \
-NITRUM_FN_SEED_DIR="$DATA_DIR/seed-empty" \
   cargo run -p host >"$HOST_LOG" 2>&1 &
 HOST_PID=$!
 

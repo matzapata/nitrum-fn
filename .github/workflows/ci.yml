@@ -44,6 +44,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  audit:
+    name: Rust Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   test:
     name: Rust Test
     runs-on: ubuntu-latest
@@ -109,7 +118,7 @@ jobs:
   publish-images:
     name: Publish images (GHCR)
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: [fmt, lint, test, e2e]
+    needs: [fmt, lint, audit, test, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

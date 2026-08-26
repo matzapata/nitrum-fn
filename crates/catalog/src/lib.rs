@@ -1,16 +1,21 @@
-//! Function catalog adapters. Filesystem / in-memory for local; DynamoDB for shared store.
+//! Function catalog adapters. DynamoDB for local (DynamoDB Local) and cloud.
 
 mod dynamodb;
-mod filesystem;
 mod idempotency;
 mod idempotency_dynamodb;
-mod idempotency_filesystem;
-mod idempotency_memory;
-mod memory;
 
 pub use dynamodb::DynamoDbCatalog;
-pub use filesystem::FilesystemCatalog;
 pub use idempotency_dynamodb::DynamoDbPublishIdempotency;
-pub use idempotency_filesystem::FilesystemPublishIdempotency;
-pub use idempotency_memory::InMemoryPublishIdempotency;
-pub use memory::InMemoryCatalog;
+
+#[cfg(test)]
+pub(crate) async fn load_test_aws_config() -> aws_config::SdkConfig {
+    let http_client = aws_smithy_http_client::Builder::new()
+        .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
+            aws_smithy_http_client::tls::rustls_provider::CryptoMode::Ring,
+        ))
+        .build_https();
+    aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .http_client(http_client)
+        .load()
+        .await
+}

@@ -1,71 +1,96 @@
-use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StoreBackend {
-    Filesystem,
-    Aws,
-}
+use anyhow::{bail, Context, Result};
 
 pub struct WorkerConfig {
-    pub store: StoreBackend,
-    pub artifact_dir: PathBuf,
-    pub catalog_path: PathBuf,
-    pub s3_bucket: Option<String>,
+    pub s3_bucket: String,
     pub s3_endpoint: Option<String>,
-    pub ddb_table: Option<String>,
+    pub ddb_table: String,
     pub ddb_endpoint: Option<String>,
-    pub sqs_queue_url: Option<String>,
+    pub sqs_queue_url: String,
     pub sqs_endpoint: Option<String>,
     pub sqs_create_queue: bool,
 }
 
 impl WorkerConfig {
-    pub fn from_env() -> Self {
-        let store = match std::env::var("NITRUM_FN_STORE")
-            .unwrap_or_else(|_| "fs".into())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "aws" => StoreBackend::Aws,
-            _ => StoreBackend::Filesystem,
-        };
-        Self {
-            store,
-            artifact_dir: std::env::var("NITRUM_FN_ARTIFACT_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("./.data/artifacts")),
-            catalog_path: std::env::var("NITRUM_FN_CATALOG_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("./.data/catalog.json")),
-            s3_bucket: std::env::var("NITRUM_FN_S3_BUCKET")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            s3_endpoint: std::env::var("NITRUM_FN_S3_ENDPOINT")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            ddb_table: std::env::var("NITRUM_FN_DDB_TABLE")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            ddb_endpoint: std::env::var("NITRUM_FN_DDB_ENDPOINT")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            sqs_queue_url: std::env::var("NITRUM_FN_SQS_QUEUE_URL")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            sqs_endpoint: std::env::var("NITRUM_FN_SQS_ENDPOINT")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            sqs_create_queue: env_flag("NITRUM_FN_SQS_CREATE_QUEUE"),
-        }
+    pub fn from_env() -> Result<Self> {
+        reject_legacy_store()?;
+        Ok(Self {
+            s3_bucket: require_env("NITRUM_FN_S3_BUCKET")?,
+            s3_endpoint: env_opt("NITRUM_FN_S3_ENDPOINT")?.filter(|s| !s.is_empty()),
+            ddb_table: require_env("NITRUM_FN_DDB_TABLE")?,
+            ddb_endpoint: env_opt("NITRUM_FN_DDB_ENDPOINT")?.filter(|s| !s.is_empty()),
+            sqs_queue_url: require_env("NITRUM_FN_SQS_QUEUE_URL")?,
+            sqs_endpoint: env_opt("NITRUM_FN_SQS_ENDPOINT")?.filter(|s| !s.is_empty()),
+            sqs_create_queue: parse_flag("NITRUM_FN_SQS_CREATE_QUEUE")?,
+        })
     }
 }
 
-fn env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name)
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes"
-    )
+fn env_opt(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(s) => Ok(Some(s)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => bail!("{name} is not valid UTF-8"),
+    }
+}
+
+fn require_env(name: &str) -> Result<String> {
+    env_opt(name)?
+        .filter(|s| !s.is_empty())
+        .with_context(|| format!("{name} is required"))
+}
+
+fn reject_legacy_store() -> Result<()> {
+    match env_opt("NITRUM_FN_STORE")? {
+        None => Ok(()),
+        Some(s) if s.is_empty() || s.eq_ignore_ascii_case("aws") => Ok(()),
+        Some(s) if s.eq_ignore_ascii_case("fs") || s.eq_ignore_ascii_case("filesystem") => {
+            bail!("NITRUM_FN_STORE=fs was removed; use Floci (S3/SQS) and DynamoDB Local")
+        }
+        Some(s) => bail!("invalid NITRUM_FN_STORE={s}; store is always AWS"),
+    }
+}
+
+fn parse_flag(name: &str) -> Result<bool> {
+    parse_flag_value(name, env_opt(name)?.as_deref())
+}
+
+fn parse_flag_value(name: &str, raw: Option<&str>) -> Result<bool> {
+    match raw {
+        None | Some("") => Ok(false),
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(true),
+            "0" | "false" | "no" => Ok(false),
+            other => bail!("invalid {name}={other}; expected true or false"),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_legacy_filesystem_store() {
+        assert!(reject_legacy_store_value(Some("fs")).is_err());
+        assert!(reject_legacy_store_value(Some("aws")).is_ok());
+        assert!(reject_legacy_store_value(None).is_ok());
+    }
+
+    fn reject_legacy_store_value(raw: Option<&str>) -> Result<()> {
+        match raw {
+            None => Ok(()),
+            Some(s) if s.is_empty() || s.eq_ignore_ascii_case("aws") => Ok(()),
+            Some(s) if s.eq_ignore_ascii_case("fs") || s.eq_ignore_ascii_case("filesystem") => {
+                bail!("NITRUM_FN_STORE=fs was removed; use Floci (S3/SQS) and DynamoDB Local")
+            }
+            Some(s) => bail!("invalid NITRUM_FN_STORE={s}; store is always AWS"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_flag() {
+        assert!(parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("maybe")).is_err());
+        assert!(!parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("no")).unwrap());
+        assert!(parse_flag_value("NITRUM_FN_SQS_CREATE_QUEUE", Some("yes")).unwrap());
+    }
 }

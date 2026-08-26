@@ -14,13 +14,10 @@ wasmtime = { workspace = true }
 
 [dev-dependencies]
 application = { workspace = true }
-artifacts = { workspace = true }
-catalog = { workspace = true }
 async-trait = { workspace = true }
 criterion = { workspace = true }
 domain = { workspace = true }
 runtime = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = { workspace = true }
 

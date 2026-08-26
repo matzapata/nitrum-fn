@@ -22,11 +22,12 @@ No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed 
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
+CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, workspace tests (with Floci S3+SQS + DynamoDB Local), and `tests/e2e/local.sh`. Match that locally:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo audit
 docker compose up -d
 NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
 NITRUM_FN_DDB_ENDPOINT=http://127.0.0.1:8000 \
@@ -44,8 +45,7 @@ Publish is async: the host enqueues to Floci **SQS**; **publish-worker** AOT-com
 ```bash
 docker compose up -d
 
-export NITRUM_FN_STORE=aws \
-  NITRUM_FN_S3_BUCKET=nitrum-fn \
+export NITRUM_FN_S3_BUCKET=nitrum-fn \
   NITRUM_FN_S3_ENDPOINT=http://127.0.0.1:4566 \
   NITRUM_FN_S3_CREATE_BUCKET=true \
   NITRUM_FN_DDB_TABLE=nitrum-fn-catalog \
@@ -67,8 +67,6 @@ bash examples/hello-world/deploy-local.sh
 curl -X POST http://127.0.0.1:8080/invoke/hello-world \
   -H 'content-type: application/json' -d '{}'
 ```
-
-`NITRUM_FN_STORE=fs` (default) is seed + invoke only — no SQS required. HTTP publish is disabled on the filesystem catalog (it is not shared with `publish-worker`). Use `NITRUM_FN_STORE=aws` as above for CLI publish.
 
 ## Staging e2e (cloud)
 

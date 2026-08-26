@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use api::ApiState;
-use application::ports::{ArtifactStore, FunctionCatalog, PublishBus, PublishIdempotency};
+use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
 use application::PublishFunction;
-use artifacts::{FilesystemArtifactStore, S3ArtifactStore};
+use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType, TableStatus,
@@ -18,13 +18,11 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
 use aws_sdk_sqs::Client as SqsClient;
-use catalog::{
-    DynamoDbCatalog, DynamoDbPublishIdempotency, FilesystemCatalog, FilesystemPublishIdempotency,
-};
+use catalog::{DynamoDbCatalog, DynamoDbPublishIdempotency};
 use messaging::{ensure_queue, SnsPublishBus, SqsPublishBus};
 use tracing::info;
 
-use crate::config::{ApiConfig, StoreBackend};
+use crate::config::ApiConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,71 +33,36 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = ApiConfig::from_env();
+    let config = ApiConfig::from_env().context("load api config")?;
 
-    let (catalog, artifacts, idempotency) = match config.store {
-        StoreBackend::Filesystem => {
-            tokio::fs::create_dir_all(&config.artifact_dir)
-                .await
-                .with_context(|| {
-                    format!("create artifact dir {}", config.artifact_dir.display())
-                })?;
-            let catalog: Arc<dyn FunctionCatalog> = Arc::new(
-                FilesystemCatalog::open(&config.catalog_path)
-                    .await
-                    .with_context(|| format!("open catalog {}", config.catalog_path.display()))?,
-            );
-            let artifacts: Arc<dyn ArtifactStore> =
-                Arc::new(FilesystemArtifactStore::new(config.artifact_dir.clone()));
-            let idempotency_path = config.catalog_path.with_file_name("idempotency.json");
-            let idempotency: Arc<dyn PublishIdempotency> = Arc::new(
-                FilesystemPublishIdempotency::open(&idempotency_path)
-                    .await
-                    .with_context(|| {
-                        format!("open idempotency store {}", idempotency_path.display())
-                    })?,
-            );
-            (catalog, artifacts, idempotency)
-        }
-        StoreBackend::Aws => {
-            let bucket = config
-                .s3_bucket
-                .clone()
-                .context("NITRUM_FN_S3_BUCKET is required when NITRUM_FN_STORE=aws")?;
-            let table = config
-                .ddb_table
-                .clone()
-                .context("NITRUM_FN_DDB_TABLE is required when NITRUM_FN_STORE=aws")?;
-            let idem_table = config
-                .ddb_idempotency_table
-                .clone()
-                .context("NITRUM_FN_DDB_IDEMPOTENCY_TABLE is required when NITRUM_FN_STORE=aws")?;
-            let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
-            let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
-            if config.s3_create_bucket {
-                ensure_bucket(&s3, &bucket).await?;
-            }
-            if config.ddb_create_table {
-                ensure_table(&ddb, &table).await?;
-                DynamoDbPublishIdempotency::ensure_table(&ddb, &idem_table)
-                    .await
-                    .context("ensure idempotency table")?;
-            }
-            let catalog: Arc<dyn FunctionCatalog> =
-                Arc::new(DynamoDbCatalog::new(ddb.clone(), table.clone()));
-            let artifacts: Arc<dyn ArtifactStore> =
-                Arc::new(S3ArtifactStore::new(s3, bucket.clone(), "artifacts"));
-            let idempotency: Arc<dyn PublishIdempotency> =
-                Arc::new(DynamoDbPublishIdempotency::new(ddb, idem_table.clone()));
-            info!(
-                %bucket,
-                %table,
-                %idem_table,
-                "using S3 artifacts and DynamoDB catalog"
-            );
-            (catalog, artifacts, idempotency)
-        }
-    };
+    let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
+    let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
+    if config.s3_create_bucket {
+        ensure_bucket(&s3, &config.s3_bucket).await?;
+    }
+    if config.ddb_create_table {
+        ensure_table(&ddb, &config.ddb_table).await?;
+        DynamoDbPublishIdempotency::ensure_table(&ddb, &config.ddb_idempotency_table)
+            .await
+            .context("ensure idempotency table")?;
+    }
+    let catalog: Arc<dyn FunctionCatalog> =
+        Arc::new(DynamoDbCatalog::new(ddb.clone(), config.ddb_table.clone()));
+    let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
+        s3,
+        config.s3_bucket.clone(),
+        "artifacts",
+    ));
+    let idempotency = Arc::new(DynamoDbPublishIdempotency::new(
+        ddb,
+        config.ddb_idempotency_table.clone(),
+    ));
+    info!(
+        bucket = %config.s3_bucket,
+        table = %config.ddb_table,
+        idem_table = %config.ddb_idempotency_table,
+        "using S3 artifacts and DynamoDB catalog"
+    );
 
     let bus = build_publish_bus(&config).await?;
     let publish = Arc::new(PublishFunction::new(artifacts, bus, idempotency));
@@ -107,26 +70,16 @@ async fn main() -> Result<()> {
     let app = api::router(ApiState { publish, catalog });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    match config.store {
-        StoreBackend::Filesystem => info!(
-            %addr,
-            artifact_dir = %config.artifact_dir.display(),
-            catalog_path = %config.catalog_path.display(),
-            store = "fs",
-            "nitrum-fn api listening"
-        ),
-        StoreBackend::Aws => info!(
-            %addr,
-            bucket = ?config.s3_bucket,
-            s3_endpoint = ?config.s3_endpoint,
-            table = ?config.ddb_table,
-            ddb_endpoint = ?config.ddb_endpoint,
-            sns_topic_arn = ?config.sns_topic_arn,
-            sqs_queue_url = ?config.sqs_queue_url,
-            store = "aws",
-            "nitrum-fn api listening"
-        ),
-    }
+    info!(
+        %addr,
+        bucket = %config.s3_bucket,
+        s3_endpoint = ?config.s3_endpoint,
+        table = %config.ddb_table,
+        ddb_endpoint = ?config.ddb_endpoint,
+        sns_topic_arn = ?config.sns_topic_arn,
+        sqs_queue_url = ?config.sqs_queue_url,
+        "nitrum-fn api listening"
+    );
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -142,7 +95,7 @@ async fn main() -> Result<()> {
 
 async fn build_publish_bus(config: &ApiConfig) -> Result<Arc<dyn PublishBus>> {
     if let Some(topic_arn) = &config.sns_topic_arn {
-        let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+        let sdk = load_aws_config().await;
         let client = SnsClient::new(&sdk);
         info!(%topic_arn, "publish bus: SNS");
         return Ok(Arc::new(SnsPublishBus::new(client, topic_arn.clone())));
@@ -162,8 +115,20 @@ async fn build_publish_bus(config: &ApiConfig) -> Result<Arc<dyn PublishBus>> {
     Ok(Arc::new(SqsPublishBus::new(client, queue_url)))
 }
 
+async fn load_aws_config() -> aws_config::SdkConfig {
+    let http_client = aws_smithy_http_client::Builder::new()
+        .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
+            aws_smithy_http_client::tls::rustls_provider::CryptoMode::Ring,
+        ))
+        .build_https();
+    aws_config::defaults(BehaviorVersion::latest())
+        .http_client(http_client)
+        .load()
+        .await
+}
+
 async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = S3ConfigBuilder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
@@ -172,7 +137,7 @@ async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
 }
 
 async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = SqsConfigBuilder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
@@ -181,7 +146,7 @@ async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
 }
 
 async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = aws_sdk_dynamodb::config::Builder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);

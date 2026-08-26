@@ -1,12 +1,5 @@
 data "aws_region" "current" {}
 
-resource "aws_ssm_parameter" "store" {
-  name        = "/nitrum/${var.project_name}/env/NITRUM_FN_STORE"
-  type        = "String"
-  value       = "aws"
-  description = "nitrum-fn store backend for the enclave host"
-}
-
 resource "aws_ssm_parameter" "s3_bucket" {
   name        = "/nitrum/${var.project_name}/env/NITRUM_FN_S3_BUCKET"
   type        = "String"

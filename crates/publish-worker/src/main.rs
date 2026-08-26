@@ -7,20 +7,20 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use application::ports::{ArtifactStore, CompileQueue, FunctionCatalog, FunctionRunner};
 use application::{AppError, CompileQueuedFunction};
-use artifacts::{FilesystemArtifactStore, S3ArtifactStore};
+use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::config::Builder as SqsConfigBuilder;
 use aws_sdk_sqs::Client as SqsClient;
-use catalog::{DynamoDbCatalog, FilesystemCatalog};
+use catalog::DynamoDbCatalog;
 use domain::PublishQueuedEvent;
 use executor::WasmtimeRunner;
 use messaging::{ensure_queue, SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
 use tracing::{error, info, warn};
 
-use crate::config::{StoreBackend, WorkerConfig};
+use crate::config::WorkerConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,45 +31,18 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = WorkerConfig::from_env();
-    let queue_url = config
-        .sqs_queue_url
-        .clone()
-        .context("NITRUM_FN_SQS_QUEUE_URL is required")?;
+    let config = WorkerConfig::from_env().context("load worker config")?;
+    let queue_url = config.sqs_queue_url.clone();
 
-    let (catalog, artifacts) = match config.store {
-        StoreBackend::Filesystem => {
-            tokio::fs::create_dir_all(&config.artifact_dir)
-                .await
-                .with_context(|| {
-                    format!("create artifact dir {}", config.artifact_dir.display())
-                })?;
-            let catalog: Arc<dyn FunctionCatalog> = Arc::new(
-                FilesystemCatalog::open(&config.catalog_path)
-                    .await
-                    .with_context(|| format!("open catalog {}", config.catalog_path.display()))?,
-            );
-            let artifacts: Arc<dyn ArtifactStore> =
-                Arc::new(FilesystemArtifactStore::new(config.artifact_dir.clone()));
-            (catalog, artifacts)
-        }
-        StoreBackend::Aws => {
-            let bucket = config
-                .s3_bucket
-                .clone()
-                .context("NITRUM_FN_S3_BUCKET is required when NITRUM_FN_STORE=aws")?;
-            let table = config
-                .ddb_table
-                .clone()
-                .context("NITRUM_FN_DDB_TABLE is required when NITRUM_FN_STORE=aws")?;
-            let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
-            let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
-            let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbCatalog::new(ddb, table));
-            let artifacts: Arc<dyn ArtifactStore> =
-                Arc::new(S3ArtifactStore::new(s3, bucket, "artifacts"));
-            (catalog, artifacts)
-        }
-    };
+    let s3 = build_s3_client(config.s3_endpoint.as_deref()).await?;
+    let ddb = build_ddb_client(config.ddb_endpoint.as_deref()).await?;
+    let catalog: Arc<dyn FunctionCatalog> =
+        Arc::new(DynamoDbCatalog::new(ddb, config.ddb_table.clone()));
+    let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
+        s3,
+        config.s3_bucket.clone(),
+        "artifacts",
+    ));
 
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
@@ -169,8 +142,20 @@ async fn compile_with_heartbeat(
     }
 }
 
+async fn load_aws_config() -> aws_config::SdkConfig {
+    let http_client = aws_smithy_http_client::Builder::new()
+        .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
+            aws_smithy_http_client::tls::rustls_provider::CryptoMode::Ring,
+        ))
+        .build_https();
+    aws_config::defaults(BehaviorVersion::latest())
+        .http_client(http_client)
+        .load()
+        .await
+}
+
 async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = S3ConfigBuilder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
@@ -179,7 +164,7 @@ async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
 }
 
 async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = SqsConfigBuilder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
@@ -188,7 +173,7 @@ async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
 }
 
 async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
-    let sdk = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let sdk = load_aws_config().await;
     let mut builder = aws_sdk_dynamodb::config::Builder::from(&sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);

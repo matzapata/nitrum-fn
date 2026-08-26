@@ -22,6 +22,7 @@ aws-sdk-dynamodb = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-sdk-sns = { workspace = true }
 aws-sdk-sqs = { workspace = true }
+aws-smithy-http-client = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
