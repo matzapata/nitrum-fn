@@ -31,11 +31,17 @@ async fn main() -> Result<()> {
         TelemetryConfig::new("nitrum-fn-publish-worker")
             .with_otlp_endpoint(std::env::var(env::OTEL_EXPORTER_OTLP_ENDPOINT).ok()),
     );
-    let config = WorkerConfig::load().context("load worker config")?;
-    let queue_url = config.compile.queue_url.clone();
 
-    let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
-    let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
+    // Load configuration.
+    let config = WorkerConfig::load().context("load worker config")?;
+
+    // Build AWS clients.
+    let sdk = load_aws_config().await;
+    let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
+    let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+    let sqs = build_sqs_client(&sdk, config.compile.endpoint.as_deref())?;
+
+    // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
         ddb.clone(),
         config.catalog.table.clone(),
@@ -49,27 +55,28 @@ async fn main() -> Result<()> {
         config.artifacts.bucket.clone(),
         config.artifacts.prefix.clone(),
     ));
-
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
     let compile = Arc::new(CompileQueuedFunction::new(catalog, artifacts, runner, lock));
 
-    let sqs = build_sqs_client(config.compile.endpoint.as_deref()).await?;
+    // Build compile queue consumer.
+    let queue_url = config.compile.queue_url.clone();
     let queue: Arc<dyn CompileQueue> =
         Arc::new(SqsCompileConsumer::new(sqs, queue_url.clone()).with_wait_seconds(20));
 
     info!(
         %queue_url,
-        endpoint = ?config.compile.endpoint,
-        "nitrum-fn-publish-worker listening"
+        bucket = %config.artifacts.bucket,
+        artifacts_endpoint = ?config.artifacts.endpoint,
+        table = %config.catalog.table,
+        catalog_endpoint = ?config.catalog.endpoint,
+        compile_endpoint = ?config.compile.endpoint,
+        "nitrum-fn-publish-worker ready"
     );
 
     loop {
         tokio::select! {
-            _ = shutdown_signal() => {
-                info!("shutdown signal received");
-                break;
-            }
+            _ = shutdown_signal() => break,
             result = queue.receive() => {
                 match result {
                     Ok(None) => {}
@@ -155,27 +162,24 @@ async fn load_aws_config() -> aws_config::SdkConfig {
         .await
 }
 
-async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
-    let sdk = load_aws_config().await;
-    let mut builder = S3ConfigBuilder::from(&sdk);
+fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<S3Client> {
+    let mut builder = S3ConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
 }
 
-async fn build_sqs_client(endpoint: Option<&str>) -> Result<SqsClient> {
-    let sdk = load_aws_config().await;
-    let mut builder = SqsConfigBuilder::from(&sdk);
+fn build_sqs_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<SqsClient> {
+    let mut builder = SqsConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
     Ok(SqsClient::from_conf(builder.build()))
 }
 
-async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
-    let sdk = load_aws_config().await;
-    let mut builder = aws_sdk_dynamodb::config::Builder::from(&sdk);
+fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {
+    let mut builder = aws_sdk_dynamodb::config::Builder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
@@ -197,4 +201,5 @@ async fn shutdown_signal() {
     {
         let _ = ctrl_c.await;
     }
+    info!("shutdown signal received");
 }

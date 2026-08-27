@@ -28,10 +28,16 @@ async fn main() -> Result<()> {
         TelemetryConfig::new("nitrum-fn-host")
             .with_otlp_endpoint(std::env::var(env::OTEL_EXPORTER_OTLP_ENDPOINT).ok()),
     );
+
+    // Load configuration.
     let config = HostConfig::load().context("load host config")?;
 
-    let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;
-    let ddb = build_ddb_client(config.catalog.endpoint.as_deref()).await?;
+    // Build AWS clients.
+    let sdk = load_aws_config().await;
+    let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
+    let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+
+    // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
         ddb,
         config.catalog.table.clone(),
@@ -41,31 +47,26 @@ async fn main() -> Result<()> {
         config.artifacts.bucket.clone(),
         config.artifacts.prefix.clone(),
     ));
-    info!(
-        bucket = %config.artifacts.bucket,
-        table = %config.catalog.table,
-        "using S3 artifacts and DynamoDB catalog"
-    );
-
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
+    // Build invoke usecase.
     let invoke = Arc::new(InvokeFunction::new(catalog, artifacts, runner));
-    let app = http::router(AppState { invoke });
 
+    // Build HTTP router.
+    let app = http::router(AppState { invoke });
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind {addr}"))?;
     info!(
         %addr,
         bucket = %config.artifacts.bucket,
         artifacts_endpoint = ?config.artifacts.endpoint,
         table = %config.catalog.table,
         catalog_endpoint = ?config.catalog.endpoint,
-        "nitrum-fn host listening"
+        "nitrum-fn host ready"
     );
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind {addr}"))?;
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -88,18 +89,16 @@ async fn load_aws_config() -> aws_config::SdkConfig {
         .await
 }
 
-async fn build_s3_client(endpoint: Option<&str>) -> Result<S3Client> {
-    let sdk = load_aws_config().await;
-    let mut builder = S3ConfigBuilder::from(&sdk);
+fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<S3Client> {
+    let mut builder = S3ConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
 }
 
-async fn build_ddb_client(endpoint: Option<&str>) -> Result<DdbClient> {
-    let sdk = load_aws_config().await;
-    let mut builder = aws_sdk_dynamodb::config::Builder::from(&sdk);
+fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {
+    let mut builder = aws_sdk_dynamodb::config::Builder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
