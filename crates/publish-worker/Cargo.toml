@@ -27,4 +27,4 @@ aws-sdk-sqs = { workspace = true }
 aws-smithy-http-client = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+telemetry = { workspace = true }

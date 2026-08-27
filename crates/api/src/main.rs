@@ -15,18 +15,17 @@ use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use messaging::SnsPublishBus;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use telemetry::{env, TelemetryConfig};
 use tracing::info;
 
 use crate::config::ApiConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let telemetry = telemetry::init(
+        TelemetryConfig::new("nitrum-fn-api")
+            .with_otlp_endpoint(std::env::var(env::OTEL_EXPORTER_OTLP_ENDPOINT).ok()),
+    );
 
     // Load configuration.
     let config = ApiConfig::load().context("load api config")?;
@@ -79,6 +78,7 @@ async fn main() -> Result<()> {
         .await
         .context("serve")?;
 
+    telemetry.shutdown();
     Ok(())
 }
 

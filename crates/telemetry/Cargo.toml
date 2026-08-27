@@ -1,0 +1,23 @@
+[package]
+name = "telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared observability for nitrum-fn (stdout logs + optional OTLP traces/metrics/logs)"
+
+[features]
+default = []
+# http: axum HTTP request-metrics middleware. Off by default so consumers that
+# only need logging/tracing do not pull in axum.
+http = ["dep:axum"]
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, optional = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-opentelemetry = { workspace = true }

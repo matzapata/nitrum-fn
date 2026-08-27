@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -12,15 +10,16 @@ use tower_http::trace::TraceLayer;
 
 use crate::error::HttpError;
 use crate::state::AppState;
-use crate::telemetry::{outcome_for_error, record_invoke};
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(|| async { StatusCode::OK }))
-        .route("/invoke/{name}", post(invoke))
-        .layer(DefaultBodyLimit::max(MAX_INVOKE_BODY_BYTES))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+    telemetry::http::instrument_router(
+        Router::new()
+            .route("/healthz", get(|| async { StatusCode::OK }))
+            .route("/invoke/{name}", post(invoke))
+            .layer(DefaultBodyLimit::max(MAX_INVOKE_BODY_BYTES))
+            .layer(TraceLayer::new_for_http())
+            .with_state(state),
+    )
 }
 
 async fn invoke(
@@ -29,22 +28,7 @@ async fn invoke(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, HttpError> {
-    let started = Instant::now();
-    let result = invoke_inner(state, &name, headers, body).await;
-    match &result {
-        Ok(_) => record_invoke(&name, "ok", started),
-        Err(HttpError(err)) => record_invoke(&name, outcome_for_error(err), started),
-    }
-    result
-}
-
-async fn invoke_inner(
-    state: AppState,
-    name: &str,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<impl IntoResponse, HttpError> {
-    let function = FunctionId::new(name).map_err(application::AppError::from)?;
+    let function = FunctionId::new(&name).map_err(application::AppError::from)?;
     let version = match headers
         .get("x-nitrum-fn-version")
         .and_then(|v| v.to_str().ok())

@@ -2,7 +2,6 @@ mod config;
 mod error;
 mod http;
 mod state;
-mod telemetry;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,22 +16,18 @@ use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
 use catalog::DynamoDbFunctionCatalog;
 use executor::WasmtimeRunner;
+use telemetry::{env, TelemetryConfig};
 use tracing::info;
 
 use crate::config::HostConfig;
 use crate::state::AppState;
-use crate::telemetry::Telemetry;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    let telemetry = Telemetry::init();
+    let telemetry = telemetry::init(
+        TelemetryConfig::new("nitrum-fn-host")
+            .with_otlp_endpoint(std::env::var(env::OTEL_EXPORTER_OTLP_ENDPOINT).ok()),
+    );
     let config = HostConfig::load().context("load host config")?;
 
     let s3 = build_s3_client(config.artifacts.endpoint.as_deref()).await?;

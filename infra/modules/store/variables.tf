@@ -19,3 +19,9 @@ variable "eif_s3_key" {
   default     = "enclave.eif"
   description = "S3 object key of the EIF (control-plane expects {eif-hash}.eif)."
 }
+
+variable "sns_alarm_topic_arn" {
+  type        = string
+  default     = ""
+  description = "Optional SNS topic ARN for CloudWatch alarms. Empty string disables alarm resources."
+}

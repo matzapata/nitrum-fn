@@ -20,19 +20,17 @@ use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use domain::PublishQueuedEvent;
 use executor::WasmtimeRunner;
 use messaging::{SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
+use telemetry::{env, TelemetryConfig};
 use tracing::{error, info, warn};
 
 use crate::config::WorkerConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
+    let telemetry = telemetry::init(
+        TelemetryConfig::new("nitrum-fn-publish-worker")
+            .with_otlp_endpoint(std::env::var(env::OTEL_EXPORTER_OTLP_ENDPOINT).ok()),
+    );
     let config = WorkerConfig::load().context("load worker config")?;
     let queue_url = config.compile.queue_url.clone();
 
@@ -115,6 +113,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    telemetry.shutdown();
     Ok(())
 }
 

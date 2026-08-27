@@ -91,7 +91,7 @@ curl -X POST http://127.0.0.1:8081/invoke/hello-world -H 'content-type: applicat
 
 End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Observability** uses Nitrum’s OTel path — not a collector in this repo. The host exports OTLP (**gRPC** by default). Leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset for stdout-only local runs.
+**Observability** uses Nitrum’s OTel path — not a collector in this repo. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 
 ## Cloud deploy
 

@@ -34,7 +34,9 @@ fn publish_router(usecase: Arc<PublishFunction>) -> Router {
 }
 
 pub fn router(state: ApiState) -> Router {
-    catalog_router(state.catalog).merge(publish_router(state.publish))
+    telemetry::http::instrument_router(
+        catalog_router(state.catalog).merge(publish_router(state.publish)),
+    )
 }
 
 #[derive(Serialize)]
@@ -66,7 +68,6 @@ async fn publish(
             wasm: body.to_vec(),
         })
         .await?;
-
     Ok((
         StatusCode::ACCEPTED,
         Json(PublishBody {

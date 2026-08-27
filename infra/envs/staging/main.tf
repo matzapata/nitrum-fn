@@ -7,9 +7,10 @@ module "network" {
 module "store" {
   source = "../../modules/store"
 
-  project_name = var.project_name
-  retain       = var.retain
-  eif_s3_key   = local.eif_s3_key
+  project_name          = var.project_name
+  retain                = var.retain
+  eif_s3_key            = local.eif_s3_key
+  sns_alarm_topic_arn   = var.sns_alarm_topic_arn
 }
 
 module "api" {
