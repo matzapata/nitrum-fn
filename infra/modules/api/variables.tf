@@ -71,18 +71,40 @@ variable "desired_count" {
 
 variable "cpu" {
   type        = number
-  default     = 512
-  description = "Fargate task CPU units (API stores .wasm and publishes SNS; compile is off-box)."
+  default     = 1024
+  description = "Fargate task CPU units (app + ADOT sidecar)."
 }
 
 variable "memory" {
   type        = number
-  default     = 1024
-  description = "Fargate task memory in MiB."
+  default     = 2048
+  description = "Fargate task memory in MiB (app + ADOT sidecar)."
 }
 
 variable "log_retention_in_days" {
   type        = number
   default     = 7
   description = "CloudWatch Logs retention for the API task."
+}
+
+variable "metrics_log_group_name" {
+  type        = string
+  description = "Shared CloudWatch log group name for EMF metrics (store module)."
+}
+
+variable "metrics_log_group_arn" {
+  type        = string
+  description = "Shared CloudWatch log group ARN for EMF metrics (store module)."
+}
+
+variable "otel_collector_image" {
+  type        = string
+  default     = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+  description = "ADOT Collector sidecar image."
+}
+
+variable "enable_xray_tracing" {
+  type        = bool
+  default     = false
+  description = "When true, ADOT exports OTLP traces to X-Ray."
 }

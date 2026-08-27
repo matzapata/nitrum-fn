@@ -62,3 +62,13 @@ output "compile_dlq_arn" {
   description = "SQS DLQ ARN for failed compile jobs"
   value       = aws_sqs_queue.compile_dlq.arn
 }
+
+output "metrics_log_group_name" {
+  description = "CloudWatch log group for EMF metrics (shared by ADOT on enclave and Fargate)"
+  value       = aws_cloudwatch_log_group.metrics.name
+}
+
+output "metrics_log_group_arn" {
+  description = "ARN of the EMF metrics log group"
+  value       = aws_cloudwatch_log_group.metrics.arn
+}

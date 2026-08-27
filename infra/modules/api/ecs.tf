@@ -36,6 +36,14 @@ resource "aws_ecs_task_definition" "api" {
         { name = "NITRUM_FN_SERVER__PORT", value = tostring(local.container_port) },
         { name = "AWS_REGION", value = data.aws_region.current.name },
         { name = "OTEL_SERVICE_NAME", value = "nitrum-fn-api" },
+        { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" },
+        { name = "OTEL_EXPORTER_OTLP_PROTOCOL", value = "grpc" },
+      ]
+      dependsOn = [
+        {
+          containerName = local.otel_container_name
+          condition     = "START"
+        }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -43,6 +51,24 @@ resource "aws_ecs_task_definition" "api" {
           "awslogs-group"         = aws_cloudwatch_log_group.api.name
           "awslogs-region"        = data.aws_region.current.name
           "awslogs-stream-prefix" = "api"
+        }
+      }
+    },
+    {
+      name      = local.otel_container_name
+      image     = var.otel_collector_image
+      essential = true
+      command   = ["--config=env:AOT_CONFIG_CONTENT"]
+      environment = [
+        { name = "AOT_CONFIG_CONTENT", value = local.otel_config },
+        { name = "AWS_REGION", value = data.aws_region.current.name },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.api.name
+          "awslogs-region"        = data.aws_region.current.name
+          "awslogs-stream-prefix" = "otel"
         }
       }
     }

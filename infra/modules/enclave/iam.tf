@@ -74,8 +74,8 @@ data "aws_iam_policy_document" "instance" {
       "${aws_cloudwatch_log_group.data_plane.arn}:*",
       aws_cloudwatch_log_group.control_plane.arn,
       "${aws_cloudwatch_log_group.control_plane.arn}:*",
-      aws_cloudwatch_log_group.metrics.arn,
-      "${aws_cloudwatch_log_group.metrics.arn}:*",
+      var.metrics_log_group_arn,
+      "${var.metrics_log_group_arn}:*",
     ]
   }
 

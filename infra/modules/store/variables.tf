@@ -25,3 +25,9 @@ variable "sns_alarm_topic_arn" {
   default     = ""
   description = "Optional SNS topic ARN for CloudWatch alarms. Empty string disables alarm resources."
 }
+
+variable "log_retention_in_days" {
+  type        = number
+  default     = 7
+  description = "CloudWatch Logs retention for shared observability log groups (e.g. EMF metrics)."
+}

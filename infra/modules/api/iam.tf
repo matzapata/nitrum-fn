@@ -77,6 +77,40 @@ data "aws_iam_policy_document" "task" {
     actions   = ["sns:Publish"]
     resources = [var.publish_topic_arn]
   }
+
+  statement {
+    sid    = "OtelCloudWatchLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogStreams",
+    ]
+    resources = [
+      aws_cloudwatch_log_group.api.arn,
+      "${aws_cloudwatch_log_group.api.arn}:*",
+      var.metrics_log_group_arn,
+      "${var.metrics_log_group_arn}:*",
+      "arn:aws:logs:${data.aws_region.current.name}:*:log-group:/nitrum/${var.project_name}/*",
+      "arn:aws:logs:${data.aws_region.current.name}:*:log-group:/nitrum/${var.project_name}/*:*",
+    ]
+  }
+
+  dynamic "statement" {
+    for_each = var.enable_xray_tracing ? [1] : []
+    content {
+      sid    = "XRayTraceIngestion"
+      effect = "Allow"
+      actions = [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords",
+        "xray:GetSamplingRules",
+        "xray:GetSamplingTargets",
+      ]
+      resources = ["*"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {

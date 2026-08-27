@@ -117,7 +117,12 @@ variable "enable_xray_tracing" {
 variable "log_retention_in_days" {
   type        = number
   default     = 7
-  description = "CloudWatch Logs retention for data-plane, control-plane, and metrics log groups."
+  description = "CloudWatch Logs retention for data-plane and control-plane log groups."
+}
+
+variable "metrics_log_group_arn" {
+  type        = string
+  description = "ARN of the shared EMF metrics log group (owned by the store module)."
 }
 
 variable "sns_alarm_topic_arn" {

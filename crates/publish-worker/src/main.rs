@@ -3,7 +3,6 @@
 mod config;
 
 use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use application::ports::{
     ArtifactStore, CompileQueue, FunctionCatalog, FunctionRunner, PublishLock,
@@ -22,7 +21,6 @@ use executor::WasmtimeRunner;
 use messaging::{SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
 use telemetry::{env, TelemetryConfig};
 use tracing::{error, info, warn};
-
 use crate::config::WorkerConfig;
 
 #[tokio::main]
