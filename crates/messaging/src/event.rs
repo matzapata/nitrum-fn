@@ -28,7 +28,6 @@ mod tests {
     #[test]
     fn parses_raw_event() {
         let raw = r#"{"function":"echo","content_hash":"ab","wasm_bytes":1}"#;
-        // content_hash must be 64 hex in real use; domain doesn't validate length in deserialize
         let event = parse_queued_event(raw).expect("raw");
         assert_eq!(event.function, "echo");
         assert_eq!(event.wasm_bytes, 1);

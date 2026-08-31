@@ -49,12 +49,12 @@ pub enum AppError {
 }
 
 impl AppError {
-    /// True for failures whose Display may include driver / guest internals.
+    /// True for failures whose Display may include driver or guest details.
     pub fn is_internal(&self) -> bool {
         matches!(self, Self::Invoke(_) | Self::Trap(_) | Self::Storage(_))
     }
 
-    /// Stable client-facing message. Log [`Display`] separately for internals.
+    /// Stable client-facing message. Log [`Display`] separately.
     pub fn public_message(&self) -> String {
         if self.is_internal() {
             "internal error".into()

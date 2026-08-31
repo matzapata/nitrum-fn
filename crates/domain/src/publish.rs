@@ -12,7 +12,7 @@ pub struct PublishResponse {
     pub version: VersionLabel,
     pub content_hash: ContentHash,
     pub wasm_bytes: usize,
-    /// Always `"queued"` until a future ready-status API exists.
+    /// Publish accept status (`"queued"` while AOT runs).
     pub status: &'static str,
 }
 

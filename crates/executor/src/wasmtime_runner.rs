@@ -14,9 +14,8 @@ use wasmtime::{
 
 /// Runs guest modules under the v0 `invoke(ptr, len) -> len` ABI.
 ///
-/// No in-process Module cache: each invoke deserializes from artifacts.
-/// Publish uses `compile`; the enclave invoke path is load-only.
-/// See `internal/ARCHITECTURE.md` §"Deferred: in-process Module cache".
+/// Each invoke deserializes from artifacts. Publish uses `compile`; the enclave
+/// invoke path is load-only.
 pub struct WasmtimeRunner {
     engine: Engine,
     invoke_timeout: Duration,
@@ -91,8 +90,7 @@ impl WasmtimeRunner {
 
     fn deserialize(engine: &Engine, compiled: &[u8]) -> Result<Module, AppError> {
         // SAFETY: `compiled` was produced by `Module::serialize` after a validating
-        // `Module::new` in this host (same Engine config). Never deserialize
-        // client-supplied AOT bytes.
+        // `Module::new` in this host (same Engine config).
         unsafe {
             Module::deserialize(engine, compiled)
                 .map_err(|e| AppError::Invoke(format!("deserialize compiled module: {e}")))
@@ -119,7 +117,7 @@ impl WasmtimeRunner {
             .get_typed_func::<(i32, i32), i32>(&mut store, "invoke")
             .map_err(|e| AppError::Invoke(format!("module missing `invoke`: {e}")))?;
 
-        // Reserve room at offset 64 so a tiny prologue stays clear if guests grow later.
+        // Input starts at offset 64 so a small prologue stays clear of the buffer.
         const OFFSET: usize = 64;
         let needed = OFFSET + input.len();
         let pages_needed = needed.div_ceil(65536) as u64;

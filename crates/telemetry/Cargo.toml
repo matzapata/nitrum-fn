@@ -7,8 +7,7 @@ description = "Shared observability for nitrum-fn (stdout logs + optional OTLP t
 
 [features]
 default = []
-# http: axum HTTP request-metrics middleware. Off by default so consumers that
-# only need logging/tracing do not pull in axum.
+# Optional axum HTTP request-metrics middleware.
 http = ["dep:axum"]
 
 [dependencies]

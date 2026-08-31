@@ -1,5 +1,5 @@
 # Uploads the local nitrum-build EIF so the control-plane can download it at boot.
-# EIFs are large: use source_hash, not etag (S3 multipart ETags do not match filemd5).
+# EIFs are large: `source_hash` matches the local file (S3 multipart ETags differ from filemd5).
 resource "aws_s3_object" "eif" {
   bucket      = var.eif_s3_bucket
   key         = local.eif_object_key

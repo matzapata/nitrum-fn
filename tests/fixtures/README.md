@@ -24,4 +24,4 @@ Host-path Criterion bench (publish enqueue / AOT compile / invoke precompiled / 
 cargo bench -p executor --bench precompile
 ```
 
-No in-process Module cache — each invoke reloads `.cwasm` from artifacts (see ARCHITECTURE.md §9).
+Each invoke reloads `.cwasm` from artifacts.

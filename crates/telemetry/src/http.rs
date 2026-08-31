@@ -1,8 +1,8 @@
 //! Generic axum request-metrics middleware (OpenTelemetry HTTP semantic conventions).
 //!
 //! Records `http.server.request.duration` dimensioned by the matched route
-//! template (never the raw URL), method, status code, and scheme. Metrics only —
-//! request spans/logs stay on `tower_http::trace::TraceLayer`.
+//! template, method, status code, and scheme. Request spans and logs stay on
+//! `tower_http::trace::TraceLayer`.
 
 use std::sync::OnceLock;
 use std::time::Instant;

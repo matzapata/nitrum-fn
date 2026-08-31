@@ -1,4 +1,4 @@
-//! Use cases and ports. No axum / wasmtime / AWS.
+//! Use cases and ports.
 
 pub mod error;
 pub mod ports;

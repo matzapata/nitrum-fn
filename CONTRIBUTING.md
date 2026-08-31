@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum/develop/scripts/in
 nitrum --help
 ```
 
-Local fmt/test/`local.sh` do not need `nitrum`. Staging e2e does. Do **not** use `nitrum cloud deploy` here — this repo’s Terraform owns the VPC, Fargate API, and optional enclave fleet. Use `nitrum build` (and `nitrum describe`) only.
+Local fmt/test/`local.sh` run without `nitrum`. Staging e2e uses `nitrum build` (and `nitrum describe`) for the EIF. Terraform in this repo owns the VPC, Fargate API, and optional enclave fleet.
 
-No custom DNS. The API is the ALB hostname over HTTP. Invoke TLS is self-signed in the enclave (`curl -k` against the NLB DNS). Leave `[tls_termination] acme = false` in `nitrum.toml`.
+The API is the ALB hostname over HTTP. Invoke TLS is self-signed in the enclave (`curl -k` against the NLB DNS). Leave `[tls_termination] acme = false` in `nitrum.toml`.
 
 ## Checks
 

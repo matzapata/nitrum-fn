@@ -12,7 +12,7 @@ services:
       FLOCI_STORAGE_MODE: persistent
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
     healthcheck:
-      # Match upstream Floci image (Alpine: wget, not curl).
+      # Alpine image healthcheck uses wget.
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:4566/_floci/health"]
       interval: 10s
       timeout: 15s

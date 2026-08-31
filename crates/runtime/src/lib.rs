@@ -10,8 +10,8 @@
 //! }
 //! ```
 //!
-//! Guest ABI (wasm32): export `memory` + `invoke(ptr, len) -> len`. The first `invoke`
-//! registers the handler; there is no separate start export.
+//! Guest ABI (wasm32): export `memory` + `invoke(ptr, len) -> len`. The first
+//! `invoke` registers the handler.
 
 mod error;
 mod http;

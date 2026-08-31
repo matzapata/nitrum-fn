@@ -1,17 +1,17 @@
 aws_region = "us-east-1"
 # Must equal [project].name in nitrum.toml (SSM /nitrum/{name}/…). Staging vs prod
-# is the AWS account, not a different slug.
+# is the AWS account.
 project_name = "nitrum-fn"
 retain       = false
 
-# false = network + store + API + worker (no Nitro hosts). Flip to true after you have an EIF + PCR0.
+# false = network + store + API + worker. Set true after you have an EIF + PCR0.
 enable_enclave = false
 
 # Defaults are GHCR (CI publishes these). Override for Docker Hub or another registry:
 # api_image    = "matzapata/nitrum-fn-api:latest"
 # worker_image = "matzapata/nitrum-fn-publish-worker:latest"
 
-# Optional later: NLB alias (requires hosted_zone_id). Default invoke URL is the NLB DNS name.
+# Optional NLB alias (requires hosted_zone_id). Default invoke URL is the NLB DNS name.
 # hosted_zone_id   = "ZXXXXXXXXXXXX"
 # invoke_hostname  = "fn.staging.example.com"
 

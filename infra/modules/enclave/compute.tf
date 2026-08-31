@@ -49,7 +49,7 @@ resource "aws_launch_template" "nitro" {
 }
 
 resource "aws_autoscaling_group" "nitro" {
-  # Instances download the EIF at boot; do not launch until the object exists.
+  # Instances download the EIF at boot; wait for the object to exist.
   depends_on = [aws_s3_object.eif]
 
   min_size                  = var.asg_min_size

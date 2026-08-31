@@ -1,4 +1,4 @@
-//! Pure domain types for nitrum-fn. No I/O, no frameworks.
+//! Pure domain types for nitrum-fn.
 
 mod error;
 mod function;

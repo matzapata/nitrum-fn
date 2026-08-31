@@ -9,10 +9,8 @@
 //!
 //! With the `http` feature, [`http::instrument_router`] records
 //! `http.server.request.duration` (OpenTelemetry HTTP semantic conventions).
-//! Product/business metrics are not defined yet.
 //!
-//! Redaction: only low-cardinality, non-sensitive attributes are ever attached
-//! to telemetry. Request/response headers, bodies, and secrets are never recorded.
+//! Telemetry attributes are low-cardinality and non-sensitive.
 
 pub mod env;
 
@@ -124,7 +122,7 @@ fn service_name(cfg: &TelemetryConfig) -> String {
 /// Always installs a stdout logging layer. When `cfg.otlp_endpoint` is set, also
 /// installs OTLP trace and log layers, builds and registers the global OTLP meter
 /// provider, and returns the providers in the guard. If the OTLP exporters cannot
-/// be built, telemetry degrades to stdout-only logging rather than failing.
+/// be built, stdout-only logging is used.
 ///
 /// Must be called from within a Tokio runtime: the OTLP gRPC exporters require one.
 #[must_use]
@@ -170,9 +168,9 @@ fn init_stdout_only() {
 fn install_with_otlp(providers: otel::Providers) -> TelemetryGuard {
     let trace_layer =
         tracing_opentelemetry::layer().with_tracer(providers.tracer_provider.tracer("nitrum-fn"));
-    // Filter SDK/internal targets out of the bridge. Their own AfterShutdown
-    // warnings are emitted via `tracing`; feeding them back into the logger
-    // provider recurses until the tokio worker stack overflows.
+    // Filter OpenTelemetry SDK and tonic targets out of the bridge. Their
+    // AfterShutdown warnings are emitted via `tracing`; feeding them back into
+    // the logger provider recurses until the tokio worker stack overflows.
     let logs_layer = OpenTelemetryTracingBridge::new(&providers.logger_provider).with_filter(
         FilterFn::new(|metadata| {
             let target = metadata.target();

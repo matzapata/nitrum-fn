@@ -9,15 +9,15 @@ infra/
   modules/
     network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs/SQS/SNS endpoints
     store/     # EIF S3, artifacts S3, catalog DDB, SNS+SQS, /env SSM
-    api/       # HTTP ALB, Fargate (ALB DNS; no custom hostname)
+    api/       # HTTP ALB, Fargate (ALB DNS)
     worker/    # Fargate publish-worker (SQS → AOT)
     enclave/   # NLB, ASG, KMS, Nitrum data-plane table (optional)
   envs/staging/
 ```
 
-TLS for **invoke** terminates only in the enclave (NLB TCP passthrough, self-signed until ACME is enabled). **Publish** is HTTP to the API ALB DNS (`.wasm` upload + SNS enqueue; AOT is the publish-worker).
+TLS for **invoke** terminates in the enclave (NLB TCP passthrough, self-signed with `acme = false`). **Publish** is HTTP to the API ALB DNS (`.wasm` upload + SNS enqueue; AOT is the publish-worker).
 
-`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**, not a second slug. The `Environment = staging` tag on this env is only for AWS resource tags.
+`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**. The `Environment = staging` tag on this env is only for AWS resource tags.
 
 ## Prerequisites (once per account)
 
@@ -63,7 +63,7 @@ cargo run -p cli -- deploy ./path/to/fn.wasm --name hello-world --url "$(terrafo
 
 ## 2. Enclave fleet (invoke)
 
-Build the EIF with the [Nitrum CLI](https://github.com/matzapata/nitrum) (`nitrum build` uses `./Dockerfile` + `nitrum.toml`). Do not use `nitrum cloud deploy` — this stack is Terraform. Keep `[tls_termination] acme = false` for a self-signed enclave cert. Callers use `curl -k` against the NLB DNS.
+Build the EIF with the [Nitrum CLI](https://github.com/matzapata/nitrum) (`nitrum build` uses `./Dockerfile` + `nitrum.toml`). Terraform in this repo owns the stack. Keep `[tls_termination] acme = false` for a self-signed enclave cert. Callers use `curl -k` against the NLB DNS.
 
 ```bash
 # from repo root (linux/amd64; QEMU on Apple Silicon)
@@ -81,11 +81,11 @@ eif_version_label = "<first 12 hex of EIF sha256>"
 eif_image_sha384  = "<PCR0 hex>"
 ```
 
-3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG does not launch until the object exists.
+3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG waits for the object to exist.
 
-SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_ENV=prod`, `NITRUM_FN_ARTIFACTS__BUCKET`, and `NITRUM_FN_CATALOG__TABLE` so Nitrum can inject them into the enclave. The host does not need SNS/SQS or the publish lock table in the enclave (publish is the Fargate API).
+SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_ENV=prod`, `NITRUM_FN_ARTIFACTS__BUCKET`, and `NITRUM_FN_CATALOG__TABLE` so Nitrum can inject them into the enclave. Publish (SNS/SQS, lock table) stays on the Fargate API.
 
-Invoke (`-k` because the enclave cert is self-signed):
+Invoke (`curl -k` with the self-signed enclave cert):
 
 ```bash
 curl -k -X POST "$(terraform -chdir=infra/envs/staging output -raw invoke_url)/invoke/hello-world" \

@@ -18,7 +18,7 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if input.sig.asyncness.is_some() {
         return syn::Error::new_spanned(
             input.sig.fn_token,
-            "#[runtime::main] async handlers are not supported yet",
+            "#[runtime::main] requires a synchronous fn",
         )
         .to_compile_error()
         .into();

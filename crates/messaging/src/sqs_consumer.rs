@@ -58,8 +58,7 @@ impl CompileQueue for SqsCompileConsumer {
                 event,
             })),
             Err(err) => {
-                // Malformed payloads never become valid; delete so they do not
-                // loop. They will not appear on the compile DLQ.
+                // Drop malformed payloads so they cannot retry forever.
                 warn!(error = %err, "dropping malformed compile queue message");
                 self.delete(&receipt).await?;
                 Ok(None)
