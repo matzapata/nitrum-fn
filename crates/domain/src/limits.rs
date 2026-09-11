@@ -16,7 +16,19 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_COMPILED_BYTES: usize = 8 * MAX_WASM_BYTES;
 
 /// Wall-clock guest invoke deadline.
-pub const INVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+pub const INVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Epoch ticker interval used with [`INVOKE_TIMEOUT`].
 pub const EPOCH_TICK: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Per-function HTTPS origin allowlist size.
+pub const MAX_EGRESS_ALLOW: usize = 8;
+
+/// Guest outbound GET URL length cap.
+pub const MAX_HTTP_URL_BYTES: usize = 2048;
+
+/// Guest outbound GET response body cap.
+pub const MAX_HTTP_BODY_BYTES: usize = 256 * 1024;
+
+/// Guest outbound GET wall-clock timeout.
+pub const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);

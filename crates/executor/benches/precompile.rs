@@ -152,6 +152,7 @@ impl FunctionCatalog for MemCatalog {
         label: &VersionLabel,
         hash: ContentHash,
         _queued_at_ms: u64,
+        _egress_allow: &[domain::EgressOrigin],
     ) -> Result<bool, AppError> {
         self.entries
             .lock()
@@ -176,6 +177,7 @@ impl FunctionCatalog for MemCatalog {
             id: id.clone(),
             label: label.clone(),
             content_hash: hash,
+            egress_allow: vec![],
         })
     }
 
@@ -247,6 +249,7 @@ impl BenchEnv {
             .block_on(publish.execute(PublishRequest {
                 function: function.clone(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             }))
             .expect("seed publish");
         for event in rt.block_on(bus.take()) {
@@ -288,6 +291,7 @@ fn host_path_benches(c: &mut Criterion) {
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
+                    egress_allow: vec![],
                 }));
                 let _ = env.rt.block_on(env.bus.take());
                 black_box(res.expect("publish"));
@@ -305,6 +309,7 @@ fn host_path_benches(c: &mut Criterion) {
                     env.function.to_string(),
                     env.hash.to_hex(),
                     env.wasm.len(),
+                    vec![],
                 );
                 env.artifacts.drop_compiled(&env.hash);
                 let res = env.rt.block_on(env.compile.execute(&event));
@@ -333,7 +338,7 @@ fn host_path_benches(c: &mut Criterion) {
             b.iter(|| {
                 let res = env
                     .rt
-                    .block_on(env.runner.run(&env.hash, &env.wasm, &env.payload))
+                    .block_on(env.runner.run(&env.hash, &env.wasm, &env.payload, &[]))
                     .expect("runner.run");
                 black_box(res);
             });

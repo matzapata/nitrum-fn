@@ -19,6 +19,7 @@ pub trait FunctionRunner: Send + Sync {
         hash: &ContentHash,
         compiled: &[u8],
         input: &[u8],
+        egress_allow: &[domain::EgressOrigin],
     ) -> Result<RunOutcome, AppError>;
 
     /// Compile from raw wasm and run one invoke.
@@ -27,5 +28,6 @@ pub trait FunctionRunner: Send + Sync {
         hash: &ContentHash,
         wasm: &[u8],
         input: &[u8],
+        egress_allow: &[domain::EgressOrigin],
     ) -> Result<RunOutcome, AppError>;
 }

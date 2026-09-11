@@ -34,7 +34,12 @@ impl InvokeFunction {
         let compiled = self.artifacts.get_compiled(&version.content_hash).await?;
         let outcome = self
             .runner
-            .run_precompiled(&version.content_hash, &compiled, &req.payload)
+            .run_precompiled(
+                &version.content_hash,
+                &compiled,
+                &req.payload,
+                &version.egress_allow,
+            )
             .await?;
 
         Ok(InvokeResponse {
@@ -64,6 +69,7 @@ mod tests {
             _label: &VersionLabel,
             _hash: ContentHash,
             _queued_at_ms: u64,
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<bool, AppError> {
             Ok(true)
         }
@@ -183,6 +189,7 @@ mod tests {
             _hash: &ContentHash,
             _compiled: &[u8],
             input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<RunOutcome, AppError> {
             *self.precompiled.lock().unwrap() += 1;
             if self.trap_precompiled {
@@ -201,6 +208,7 @@ mod tests {
             _hash: &ContentHash,
             _wasm: &[u8],
             input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<RunOutcome, AppError> {
             *self.from_wasm.lock().unwrap() += 1;
             let mut out = b"wasm:".to_vec();
@@ -218,6 +226,7 @@ mod tests {
                 id: id.clone(),
                 label: VersionLabel::latest(),
                 content_hash: hash.clone(),
+                egress_allow: vec![],
             },
         });
         let artifacts = Arc::new(MemArtifacts::with_both(
@@ -240,6 +249,7 @@ mod tests {
                 id: id.clone(),
                 label: VersionLabel::latest(),
                 content_hash: hash.clone(),
+                egress_allow: vec![],
             },
         });
         let artifacts = Arc::new(MemArtifacts::wasm_only(&hash, wasm.to_vec()));

@@ -129,13 +129,9 @@ echo "$meta" | grep -q '"name":"hello-world"' || fail "metadata name: $meta"
 pass "function metadata"
 
 echo "==> invoke after deploy"
-headers="$(mktemp)"
-body="$(curl -sS -D "$headers" -X POST \
-  "${HOST_URL}/invoke/hello-world" \
-  -H 'content-type: application/json' \
-  -d '{}')"
+body="$(cargo run -p cli --quiet -- invoke hello-world --url "$HOST_URL" -d '{}')" \
+  || { dump_logs; fail "invoke failed"; }
 
-grep -qi '^HTTP/.* 200' "$headers" || fail "status not 200 ($(head -1 "$headers"))"
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
 pass "invoke after deploy"
 

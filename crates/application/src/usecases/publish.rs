@@ -38,8 +38,12 @@ impl PublishFunction {
         }
 
         let hash = ContentHash::from_bytes(&req.wasm);
-        let event =
-            PublishQueuedEvent::new(req.function.to_string(), hash.to_hex(), req.wasm.len());
+        let event = PublishQueuedEvent::new(
+            req.function.to_string(),
+            hash.to_hex(),
+            req.wasm.len(),
+            req.egress_allow.clone(),
+        );
         self.lock
             .acquire(&req.function, &hash, event.queued_at_ms)
             .await?;
@@ -62,6 +66,7 @@ impl PublishFunction {
             version: VersionLabel::latest(),
             content_hash: stored,
             wasm_bytes: req.wasm.len(),
+            egress_allow: req.egress_allow,
             status: "queued",
         })
     }
@@ -223,6 +228,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: vec![],
+                egress_allow: vec![],
             })
             .await
             .expect_err("empty");
@@ -240,6 +246,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm,
+                egress_allow: vec![],
             })
             .await
             .expect_err("too large");
@@ -260,6 +267,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             })
             .await
             .expect_err("bus");
@@ -282,6 +290,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm not empty".to_vec(),
+                egress_allow: vec![],
             })
             .await
             .expect_err("put");
@@ -301,6 +310,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             })
             .await
             .expect("publish");
@@ -321,6 +331,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm one".to_vec(),
+                egress_allow: vec![],
             })
             .await
             .expect("first");
@@ -328,6 +339,7 @@ mod tests {
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm two".to_vec(),
+                egress_allow: vec![],
             })
             .await
             .expect_err("conflict");
@@ -346,10 +358,12 @@ mod tests {
         let a = publish.execute(PublishRequest {
             function: FunctionId::new("echo").unwrap(),
             wasm: b"\0asm one".to_vec(),
+            egress_allow: vec![],
         });
         let b = publish.execute(PublishRequest {
             function: FunctionId::new("echo").unwrap(),
             wasm: b"\0asm two".to_vec(),
+            egress_allow: vec![],
         });
         let (ra, rb) = tokio::join!(a, b);
         let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();

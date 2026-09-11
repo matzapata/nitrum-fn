@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use domain::{FunctionId, PublishRequest, VersionLabel, MAX_WASM_BYTES};
+use domain::{
+    normalize_egress_allow, EgressOrigin, FunctionId, PublishRequest, VersionLabel, MAX_WASM_BYTES,
+};
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
@@ -53,19 +55,36 @@ struct FunctionBody {
     name: String,
     version: String,
     hash: String,
+    egress_allow: Vec<String>,
+}
+
+const ALLOW_URL_HEADER: &str = "x-nitrum-fn-allow-url";
+
+fn parse_allow_headers(headers: &HeaderMap) -> Result<Vec<EgressOrigin>, HttpError> {
+    let mut origins = Vec::new();
+    for value in headers.get_all(ALLOW_URL_HEADER) {
+        let raw = value
+            .to_str()
+            .map_err(|_| application::AppError::Compile("invalid allow-url header".into()))?;
+        origins.push(EgressOrigin::parse(raw).map_err(application::AppError::from)?);
+    }
+    normalize_egress_allow(origins).map_err(application::AppError::from).map_err(Into::into)
 }
 
 async fn publish(
     State(state): State<PublishState>,
     Path(name): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, HttpError> {
     let function = FunctionId::new(&name).map_err(application::AppError::from)?;
+    let egress_allow = parse_allow_headers(&headers)?;
     let response = state
         .publish
         .execute(PublishRequest {
             function,
             wasm: body.to_vec(),
+            egress_allow,
         })
         .await?;
     Ok((
@@ -93,6 +112,11 @@ async fn get_function(
         name: version.id.to_string(),
         version: version.label.to_string(),
         hash: version.content_hash.to_hex(),
+        egress_allow: version
+            .egress_allow
+            .iter()
+            .map(|o| o.as_str().to_string())
+            .collect(),
     }))
 }
 
@@ -229,6 +253,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(second.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn publish_records_allow_urls_on_event() {
+        let (app, bus) = publish_app();
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/functions/echo")
+            .header("content-type", "application/wasm")
+            .header("x-nitrum-fn-allow-url", "https://api.example.com")
+            .body(Body::from(b"\0asm one".as_slice()))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let events = bus.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].egress_allow.len(), 1);
+        assert_eq!(events[0].egress_allow[0].as_str(), "https://api.example.com");
     }
 
     #[tokio::test]

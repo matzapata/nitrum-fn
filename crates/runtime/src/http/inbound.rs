@@ -60,7 +60,7 @@ impl Request {
     }
 }
 
-/// Outgoing HTTP response from a function.
+/// HTTP response (inbound handler output or outbound fetch result).
 #[derive(Debug, Clone)]
 pub struct Response {
     status: u16,
@@ -77,7 +77,7 @@ impl Response {
         }
     }
 
-    pub fn json<T: Serialize>(value: &T) -> Result<Self, Error> {
+    pub fn from_json<T: Serialize>(value: &T) -> Result<Self, Error> {
         let body = serde_json::to_vec(value)?;
         Ok(Self {
             status: 200,
@@ -104,6 +104,10 @@ impl Response {
 
     pub fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    pub fn json<T: DeserializeOwned>(&self) -> Result<T, Error> {
+        Ok(serde_json::from_slice(&self.body)?)
     }
 
     pub(crate) fn from_parts(status: u16, headers: Vec<(String, String)>, body: Vec<u8>) -> Self {
@@ -173,7 +177,7 @@ impl IntoResponse for Response {
 
 impl IntoResponse for Value {
     fn into_response(self) -> Result<Response, Error> {
-        Response::json(&self)
+        Response::from_json(&self)
     }
 }
 

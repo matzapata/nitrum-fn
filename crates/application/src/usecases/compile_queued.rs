@@ -70,6 +70,7 @@ impl CompileQueuedFunction {
                 &VersionLabel::latest(),
                 hash.clone(),
                 event.queued_at_ms,
+                &event.egress_allow,
             )
             .await?;
         if !applied {
@@ -125,6 +126,7 @@ mod tests {
             _label: &VersionLabel,
             hash: ContentHash,
             _queued_at_ms: u64,
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<bool, AppError> {
             if self.refuse_stale {
                 return Ok(false);
@@ -148,6 +150,7 @@ mod tests {
                 id: id.clone(),
                 label: label.clone(),
                 content_hash: hash,
+                egress_allow: vec![],
             })
         }
 
@@ -252,6 +255,7 @@ mod tests {
             _hash: &ContentHash,
             _compiled: &[u8],
             _input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<RunOutcome, AppError> {
             unimplemented!()
         }
@@ -261,6 +265,7 @@ mod tests {
             _hash: &ContentHash,
             _wasm: &[u8],
             _input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<RunOutcome, AppError> {
             unimplemented!()
         }
@@ -314,6 +319,7 @@ mod tests {
             content_hash: hash.to_hex(),
             wasm_bytes: 4,
             queued_at_ms,
+            egress_allow: vec![],
         }
     }
 
