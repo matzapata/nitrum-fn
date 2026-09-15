@@ -58,8 +58,11 @@ nitrum-fn/
 │   ├── publish-worker/  # SQS → AOT .cwasm + catalog upsert
 │   ├── messaging/       # SNS publish bus / SQS consumer
 │   ├── telemetry/       # OTel init shared by bins
-│   └── cli/             # talks to api (polls until ready)
-└── examples/hello-world/
+│   ├── cli/             # talks to api (polls until ready)
+│   └── payments/        # x402 (later)
+└── examples/
+    ├── hello-world/
+    └── oracle/              # enclave guest + Foundry on-chain consumer
 ```
 
 The invoke path (`host` → `InvokeFunction` → `executor`) sees plaintext bodies. Publish / catalog / API see metadata and code artifacts. `runtime` is linked into guest `.wasm`.
@@ -100,9 +103,11 @@ cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --was
 # Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe`; host mints NSM user_data = H || sha256(body)
 PCR0="<pcr0 hex from nitrum build>"
 cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["eth"]}' \
-  --wasm ./examples/oracle/target/wasm32-unknown-unknown/release/oracle.wasm \
+  --wasm ./examples/oracle/enclave/target/wasm32-unknown-unknown/release/oracle.wasm \
   --pcr0 "$PCR0"
 ```
+
+On-chain consumer (Foundry + `base/nitro-validator`): see [`examples/oracle/README.md`](examples/oracle/README.md).
 
 **Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 

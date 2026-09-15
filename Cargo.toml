@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["examples/hello-world", "examples/oracle"]
+exclude = ["examples/hello-world", "examples/oracle/enclave"]
 
 [workspace.package]
 edition = "2021"

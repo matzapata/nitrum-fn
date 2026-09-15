@@ -1,0 +1,6 @@
+[submodule "examples/oracle/contracts/lib/nitro-validator"]
+	path = examples/oracle/contracts/lib/nitro-validator
+	url = https://github.com/base/nitro-validator
+[submodule "examples/oracle/contracts/lib/forge-std"]
+	path = examples/oracle/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

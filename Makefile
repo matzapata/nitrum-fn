@@ -1,5 +1,5 @@
 .PHONY: lint format fmt-check check audit test adapters e2e e2e-cloud ci \
-	stack stack-down images api publish-worker host
+	stack stack-down images api publish-worker host oracle-contracts
 
 # Override the registry/tag per target, e.g.:
 #   make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=sha-1234
@@ -40,6 +40,9 @@ e2e:
 
 e2e-cloud:
 	./tests/e2e/cloud.sh
+
+oracle-contracts:
+	cd examples/oracle/contracts && forge test
 
 ci: check audit test adapters e2e
 
