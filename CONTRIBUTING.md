@@ -116,17 +116,17 @@ terraform -chdir=infra/envs/staging apply
 
 The apply uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates the NLB/ASG. Every new EIF: `nitrum build`, bump **both** labels, apply (object updates, launch template rolls the ASG).
 
+Artifacts bucket names live in `config/shared/staging.yaml` / `prod.yaml` (`artifacts.bucket`). Terraform creates that exact name; changing it replaces the S3 bucket — with `retain = false` the old one is destroyed, so **republish** functions after apply.
+
 ### 4. Cloud smoke
 
-Enclave boot can take several minutes (`cloud.sh` waits up to 10 minutes).
+Enclave boot can take several minutes (`cloud.sh` waits up to 10 minutes). From the repo root the script reads `api_url` / `invoke_url` from Terraform and PCR0 from `eif_image_sha384` in `terraform.tfvars` (override with `NITRUM_FN_*` or `tests/e2e/.env`; see `tests/e2e/.env.example`).
 
 ```bash
-export NITRUM_FN_API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
-export NITRUM_FN_INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw invoke_url)"
-bash tests/e2e/cloud.sh
+./tests/e2e/cloud.sh
 ```
 
-That deploys `hello-world` to the ALB and `POST /invoke/hello-world` on the NLB (`curl -k`). Success body: `{"message":"Hello, world!"}`. On failure the script prints both URLs; check ECS (API) or ASG / control-plane logs (enclave).
+That deploys `hello-world` to the ALB, curls `POST /invoke/hello-world` on the NLB (`curl -k`), then runs CLI checks: hash-only `--wasm`, full NSM verify with `--pcr0`, and negatives (wrong hash / wrong PCR0). On failure check ECS (API) or ASG / control-plane logs (enclave).
 
 This job is **not** in GitHub Actions.
 

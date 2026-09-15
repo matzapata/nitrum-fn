@@ -1,6 +1,6 @@
 aws_region = "us-east-1"
 # Must equal [project].name in nitrum.toml (SSM /nitrum/{name}/…). Staging vs prod
-# is the AWS account.
+# is the AWS account; NITRUM_FN_ENV (staging/prod) selects config/shared/{env}.yaml.
 project_name = "nitrum-fn"
 retain       = false
 

@@ -7,17 +7,22 @@ module "network" {
 module "store" {
   source = "../../modules/store"
 
-  project_name          = var.project_name
-  retain                = var.retain
-  eif_s3_key            = local.eif_s3_key
-  sns_alarm_topic_arn   = var.sns_alarm_topic_arn
-  log_retention_in_days = var.log_retention_in_days
+  project_name            = var.project_name
+  artifacts_bucket_name   = local.artifacts_bucket_name
+  catalog_table_name      = local.catalog_table_name
+  publish_lock_table_name = local.publish_lock_table_name
+  run_env                 = local.run_env
+  retain                  = var.retain
+  eif_s3_key              = local.eif_s3_key
+  sns_alarm_topic_arn     = var.sns_alarm_topic_arn
+  log_retention_in_days   = var.log_retention_in_days
 }
 
 module "api" {
   source = "../../modules/api"
 
   project_name            = var.project_name
+  run_env                 = local.run_env
   vpc_id                  = module.network.vpc_id
   public_subnet_ids       = module.network.public_subnet_ids
   private_subnet_ids      = module.network.private_subnet_ids
@@ -41,6 +46,7 @@ module "worker" {
   source = "../../modules/worker"
 
   project_name            = var.project_name
+  run_env                 = local.run_env
   vpc_id                  = module.network.vpc_id
   private_subnet_ids      = module.network.private_subnet_ids
   artifacts_bucket_name   = module.store.artifacts_bucket_name

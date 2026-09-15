@@ -8,6 +8,26 @@ variable "project_name" {
   }
 }
 
+variable "artifacts_bucket_name" {
+  type        = string
+  description = "S3 artifacts bucket name from config/shared/{run_env}.yaml (artifacts.bucket)."
+}
+
+variable "catalog_table_name" {
+  type        = string
+  description = "DynamoDB catalog table name from config/shared/{run_env}.yaml (catalog.table)."
+}
+
+variable "publish_lock_table_name" {
+  type        = string
+  description = "DynamoDB publish-lock table name from config/shared/{run_env}.yaml (catalog.publish_lock_table)."
+}
+
+variable "run_env" {
+  type        = string
+  description = "NITRUM_FN_ENV overlay name reinjected via SSM for the enclave host (e.g. staging, prod)."
+}
+
 variable "retain" {
   type        = bool
   default     = false

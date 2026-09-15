@@ -1,3 +1,0 @@
-# Topic ARN comes from ECS env.
-publish:
-  endpoint: null

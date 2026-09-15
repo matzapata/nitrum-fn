@@ -1,5 +1,5 @@
 artifacts:
-  bucket: nitrum-fn-artifacts-prod
+  bucket: nitrum-fn-artifacts-staging
   endpoint: null
 catalog:
   table: nitrum-fn-fn-catalog

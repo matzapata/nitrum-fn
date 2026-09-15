@@ -8,6 +8,11 @@ variable "project_name" {
   }
 }
 
+variable "run_env" {
+  type        = string
+  description = "NITRUM_FN_ENV overlay name (staging / prod) injected into the task."
+}
+
 variable "vpc_id" {
   type        = string
   description = "VPC that also hosts the enclave fleet."

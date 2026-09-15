@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
 
     // Build AWS clients.
     let sdk = load_aws_config().await;
+    let bucket = config.artifacts.bucket.clone();
     let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
     let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
 
@@ -46,14 +47,14 @@ async fn main() -> Result<()> {
     ));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
         s3,
-        config.artifacts.bucket.clone(),
+        bucket.clone(),
         config.artifacts.prefix.clone(),
     ));
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
-    // Local Floci: noop. Enclave (`NITRUM_FN_ENV=prod`): Nitrum loopback crypto API.
-    let run_env = std::env::var("NITRUM_FN_ENV").unwrap_or_else(|_| "local".to_string());
+    // Local Floci: noop. Cloud (staging/prod): Nitrum loopback crypto API.
+    let run_env = config.run_env.as_str();
     let attestor: Arc<dyn FunctionAttestor> = if run_env == "local" {
         Arc::new(NoopAttestor)
     } else {
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("bind {addr}"))?;
     info!(
         %addr,
-        bucket = %config.artifacts.bucket,
+        bucket = %bucket,
         artifacts_endpoint = ?config.artifacts.endpoint,
         table = %config.catalog.table,
         catalog_endpoint = ?config.catalog.endpoint,

@@ -130,7 +130,6 @@ pub async fn run(args: InvokeArgs) -> Result<()> {
             .decode(attestation_b64.trim())
             .context("decode attestation header")?;
         verify_invoke_attestation(&doc, &nonce, pcr0, &expected, &body_bytes)?;
-        eprintln!("attestation: ok (pcr0 pinned)");
     }
 
     println!("{body}");
@@ -203,20 +202,31 @@ fn verify_invoke_attestation(
 
     let expect_hash = ContentHash::from_hex(expect_hash_hex)?;
     let body_hash = ContentHash::from_bytes(body);
+    let ud_wasm = hex::encode(&user_data[..32]);
+    let ud_body = hex::encode(&user_data[32..]);
     if user_data[..32] != *expect_hash.as_bytes() {
         bail!(
-            "attestation user_data wasm hash mismatch: expected {}, got {}",
+            "attestation user_data wasm hash mismatch: expected {}, got {ud_wasm}",
             expect_hash.to_hex(),
-            hex::encode(&user_data[..32])
         );
     }
     if user_data[32..] != *body_hash.as_bytes() {
         bail!(
-            "attestation user_data body hash mismatch: expected {}, got {}",
+            "attestation user_data body hash mismatch: expected {}, got {ud_body}",
             body_hash.to_hex(),
-            hex::encode(&user_data[32..])
         );
     }
+
+    let pcr0 = parsed
+        .pcrs
+        .get("pcr0")
+        .map(String::as_str)
+        .unwrap_or("(missing)");
+    eprintln!("attestation: ok (NSM document verified)");
+    eprintln!("  pcr0={pcr0}");
+    eprintln!("  user_data.wasm_hash={ud_wasm}");
+    eprintln!("  user_data.body_hash={ud_body}");
+    eprintln!("  document={}", BASE64.encode(document));
     Ok(())
 }
 

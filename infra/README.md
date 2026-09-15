@@ -17,7 +17,7 @@ infra/
 
 TLS for **invoke** terminates in the enclave (NLB TCP passthrough, self-signed with `acme = false`). **Publish** is HTTP to the API ALB DNS (`.wasm` upload + SNS enqueue; AOT is the publish-worker).
 
-`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**. The `Environment = staging` tag on this env is only for AWS resource tags.
+`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**. Config overlays differ: staging uses `NITRUM_FN_ENV=staging` (`config/shared/staging.yaml`); a future prod env uses `prod`. The `Environment = staging` tag on this env is only for AWS resource tags.
 
 ## Prerequisites (once per account)
 
@@ -83,7 +83,9 @@ eif_image_sha384  = "<PCR0 hex>"
 
 3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG waits for the object to exist.
 
-SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_ENV=prod`, `NITRUM_FN_ARTIFACTS__BUCKET`, and `NITRUM_FN_CATALOG__TABLE` so Nitrum can inject them into the enclave. Publish (SNS/SQS, lock table) stays on the Fargate API.
+SSM under `/nitrum/<project>/env/` injects `AWS_REGION` and `NITRUM_FN_ENV` so the host SDK and config overlay work after the data-plane clears env. Artifacts bucket, catalog table, and publish-lock table names are literals in `config/shared/{staging,prod}.yaml`; Terraform `yamldecode`s that file to create them, and services read the same values from baked YAML. Account-specific ARNs/URLs (SNS topic, SQS queue) still come from ECS env. Port and prefix live in `config/*.yaml`. Publish (SNS/SQS, lock table) stays on the Fargate API.
+
+**Bucket rename:** changing `artifacts.bucket` in YAML forces S3 replace (name is immutable). With `retain = false` the old bucket is destroyed — republish functions after apply.
 
 Invoke (`curl -k` with the self-signed enclave cert):
 
@@ -95,9 +97,7 @@ curl -k -X POST "$(terraform -chdir=infra/envs/staging output -raw invoke_url)/i
 Or run the cloud e2e (publish via ALB, invoke via NLB):
 
 ```bash
-export NITRUM_FN_API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
-export NITRUM_FN_INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw invoke_url)"
-bash tests/e2e/cloud.sh
+./tests/e2e/cloud.sh
 ```
 
 ## Every enclave release
