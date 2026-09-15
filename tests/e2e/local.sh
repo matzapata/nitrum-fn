@@ -128,12 +128,16 @@ meta="$(curl -sf "${API_URL}/functions/hello-world")" \
 echo "$meta" | grep -q '"name":"hello-world"' || fail "metadata name: $meta"
 pass "function metadata"
 
-echo "==> invoke after deploy"
-body="$(cargo run -p cli --quiet -- invoke hello-world --url "$HOST_URL" -d '{}')" \
-  || { dump_logs; fail "invoke failed"; }
+echo "==> invoke after deploy (verify x-nitrum-fn-hash)"
+EXPECTED_HASH="$(shasum -a 256 "$WASM_SRC" | awk '{print $1}')"
+body="$(cargo run -p cli --quiet -- invoke hello-world --url "$HOST_URL" -d '{}' \
+  --wasm "$WASM_SRC" 2>"$DATA_DIR/invoke.err")" \
+  || { dump_logs; cat "$DATA_DIR/invoke.err" >&2 || true; fail "invoke failed"; }
 
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
-pass "invoke after deploy"
+grep -q "x-nitrum-fn-hash=${EXPECTED_HASH}" "$DATA_DIR/invoke.err" \
+  || fail "missing/mismatched hash header (expected ${EXPECTED_HASH}): $(cat "$DATA_DIR/invoke.err")"
+pass "invoke after deploy (hash verified)"
 
 echo "==> unknown function → 404"
 code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \

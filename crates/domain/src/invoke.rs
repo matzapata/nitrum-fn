@@ -1,4 +1,4 @@
-use crate::{FunctionId, VersionLabel};
+use crate::{ContentHash, FunctionId, VersionLabel};
 
 #[derive(Debug, Clone)]
 pub struct InvokeRequest {
@@ -10,4 +10,6 @@ pub struct InvokeRequest {
 #[derive(Debug, Clone)]
 pub struct InvokeResponse {
     pub output: Vec<u8>,
+    /// sha256 of the `.wasm` bytes the host compiled and ran.
+    pub content_hash: ContentHash,
 }

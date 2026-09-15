@@ -108,7 +108,11 @@ fn validate_host(host: &str) -> Result<(), DomainError> {
             "IP literal not allowed: {host}"
         )));
     }
-    if host.contains("..") || !host.chars().all(|c| c.is_ascii() && (c.is_ascii_alphanumeric() || c == '-' || c == '.')) {
+    if host.contains("..")
+        || !host
+            .chars()
+            .all(|c| c.is_ascii() && (c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+    {
         return Err(DomainError::InvalidEgressOrigin(format!(
             "invalid hostname {host}"
         )));

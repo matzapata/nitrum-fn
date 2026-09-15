@@ -189,11 +189,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nitrum-fn-deploy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("function.toml");
-        std::fs::write(
-            &path,
-            r#"allow_urls = ["https://api.coingecko.com"]"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"allow_urls = ["https://api.coingecko.com"]"#).unwrap();
 
         let args = DeployArgs {
             wasm: PathBuf::from("./f.wasm"),

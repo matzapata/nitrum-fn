@@ -11,9 +11,13 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true }
 domain = { workspace = true }
+getrandom = "0.3"
+hex = { workspace = true }
 idna_adapter = { workspace = true }
+nitrum-verify = { package = "verify", git = "https://github.com/matzapata/nitrum", branch = "develop" }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

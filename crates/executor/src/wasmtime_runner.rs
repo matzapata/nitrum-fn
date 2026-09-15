@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use application::error::AppError;
@@ -13,17 +15,21 @@ use wasmtime::{
     Trap,
 };
 
-use crate::http_host::{default_http_client, fetch_url, SharedHttpClient, ERR_BAD_ARGS, ERR_TOO_LARGE};
+use crate::http_host::{
+    default_http_client, fetch_url, SharedHttpClient, ERR_BAD_ARGS, ERR_TOO_LARGE,
+};
 
 /// Runs guest modules under the v0 `invoke(ptr, len) -> len` ABI.
 ///
-/// Each invoke deserializes from artifacts. Publish uses `compile`; the enclave
-/// invoke path is load-only.
+/// Invoke compiles from verified `.wasm` bytes and caches `Module` by content hash.
+/// Publish still uses `compile` for optional AOT `.cwasm` artifacts.
 pub struct WasmtimeRunner {
     engine: Engine,
     invoke_timeout: Duration,
     epoch_tick: Duration,
     http_client: SharedHttpClient,
+    /// Compiled modules keyed by wasm content hash (verified before `run`).
+    modules: Mutex<HashMap<ContentHash, Module>>,
 }
 
 struct StoreData {
@@ -73,7 +79,31 @@ impl WasmtimeRunner {
             invoke_timeout,
             epoch_tick,
             http_client,
+            modules: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn cached_module(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Module, AppError> {
+        if let Some(module) = self
+            .modules
+            .lock()
+            .map_err(|_| AppError::Invoke("module cache poisoned".into()))?
+            .get(hash)
+            .cloned()
+        {
+            return Ok(module);
+        }
+        let module =
+            Module::new(&self.engine, wasm).map_err(|e| AppError::Invoke(e.to_string()))?;
+        assert_abi(&module).map_err(|e| match e {
+            AppError::Compile(msg) => AppError::Invoke(msg),
+            other => other,
+        })?;
+        self.modules
+            .lock()
+            .map_err(|_| AppError::Invoke("module cache poisoned".into()))?
+            .insert(hash.clone(), module.clone());
+        Ok(module)
     }
 
     fn epoch_deadline_ticks(&self) -> u64 {
@@ -428,6 +458,7 @@ impl FunctionRunner for WasmtimeRunner {
             invoke_timeout: timeout,
             epoch_tick: tick,
             http_client,
+            modules: Mutex::new(HashMap::new()),
         };
         let output = tokio::task::spawn_blocking(move || {
             let module = Self::deserialize(&engine, &compiled)?;
@@ -446,32 +477,25 @@ impl FunctionRunner for WasmtimeRunner {
         input: &[u8],
         egress_allow: &[EgressOrigin],
     ) -> Result<RunOutcome, AppError> {
-        let _ = hash;
-        let engine = self.engine.clone();
-        let wasm = wasm.to_vec();
+        // Compile / cache lookup outside the guest epoch; only invoke_sync is timed.
+        let module = self.cached_module(hash, wasm)?;
         let input = input.to_vec();
         let egress_allow = egress_allow.to_vec();
         let timeout = self.invoke_timeout;
         let tick = self.epoch_tick;
         let http_client = self.http_client.clone();
-
+        let engine = self.engine.clone();
         let runner = WasmtimeRunner {
-            engine: engine.clone(),
+            engine,
             invoke_timeout: timeout,
             epoch_tick: tick,
             http_client,
+            modules: Mutex::new(HashMap::new()),
         };
-        let output = tokio::task::spawn_blocking(move || {
-            let module =
-                Module::new(&engine, &wasm).map_err(|e| AppError::Invoke(e.to_string()))?;
-            assert_abi(&module).map_err(|e| match e {
-                AppError::Compile(msg) => AppError::Invoke(msg),
-                other => other,
-            })?;
-            runner.invoke_sync(&module, &input, &egress_allow)
-        })
-        .await
-        .map_err(join_err)??;
+        let output =
+            tokio::task::spawn_blocking(move || runner.invoke_sync(&module, &input, &egress_allow))
+                .await
+                .map_err(join_err)??;
 
         Ok(RunOutcome { output })
     }
@@ -614,10 +638,16 @@ mod tests {
         let wasm = echo_wasm();
         let hash = ContentHash::from_bytes(&wasm);
 
-        let first = runner.run(&hash, &wasm, b"hello", NO_EGRESS).await.expect("run");
+        let first = runner
+            .run(&hash, &wasm, b"hello", NO_EGRESS)
+            .await
+            .expect("run");
         assert_eq!(first.output, b"hello");
 
-        let second = runner.run(&hash, &wasm, b"world", NO_EGRESS).await.expect("run");
+        let second = runner
+            .run(&hash, &wasm, b"world", NO_EGRESS)
+            .await
+            .expect("run");
         assert_eq!(second.output, b"world");
     }
 
@@ -680,7 +710,10 @@ mod tests {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = trap_wasm();
         let hash = ContentHash::from_bytes(&wasm);
-        let err = runner.run(&hash, &wasm, b"x", NO_EGRESS).await.expect_err("trap");
+        let err = runner
+            .run(&hash, &wasm, b"x", NO_EGRESS)
+            .await
+            .expect_err("trap");
         assert!(matches!(err, AppError::Trap(_)), "{err}");
     }
 
@@ -692,7 +725,10 @@ mod tests {
         let wasm = loop_wasm();
         let hash = ContentHash::from_bytes(&wasm);
         let started = Instant::now();
-        let err = runner.run(&hash, &wasm, b"x", NO_EGRESS).await.expect_err("timeout");
+        let err = runner
+            .run(&hash, &wasm, b"x", NO_EGRESS)
+            .await
+            .expect_err("timeout");
         assert!(matches!(err, AppError::Timeout(_)), "{err}");
         assert!(
             started.elapsed() < Duration::from_secs(3),
@@ -721,7 +757,10 @@ mod tests {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = huge_output_wasm();
         let hash = ContentHash::from_bytes(&wasm);
-        let err = runner.run(&hash, &wasm, b"x", NO_EGRESS).await.expect_err("too large");
+        let err = runner
+            .run(&hash, &wasm, b"x", NO_EGRESS)
+            .await
+            .expect_err("too large");
         assert!(matches!(err, AppError::PayloadTooLarge(_)), "{err}");
     }
 

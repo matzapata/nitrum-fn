@@ -20,9 +20,7 @@ impl Client {
 
     /// Start building a GET request.
     pub fn get(self, url: impl Into<String>) -> RequestBuilder {
-        RequestBuilder {
-            url: url.into(),
-        }
+        RequestBuilder { url: url.into() }
     }
 }
 

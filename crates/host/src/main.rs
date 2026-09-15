@@ -1,3 +1,4 @@
+mod attestor;
 mod config;
 mod error;
 mod http;
@@ -7,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
+use application::ports::{ArtifactStore, FunctionAttestor, FunctionCatalog, FunctionRunner};
 use application::InvokeFunction;
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
@@ -19,6 +20,7 @@ use executor::WasmtimeRunner;
 use telemetry::{env, TelemetryConfig};
 use tracing::info;
 
+use crate::attestor::{NitrumCryptoAttestor, NoopAttestor};
 use crate::config::HostConfig;
 use crate::state::AppState;
 
@@ -50,11 +52,19 @@ async fn main() -> Result<()> {
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
+    // Local Floci: noop. Enclave (`NITRUM_FN_ENV=prod`): Nitrum loopback crypto API.
+    let run_env = std::env::var("NITRUM_FN_ENV").unwrap_or_else(|_| "local".to_string());
+    let attestor: Arc<dyn FunctionAttestor> = if run_env == "local" {
+        Arc::new(NoopAttestor)
+    } else {
+        Arc::new(NitrumCryptoAttestor::new().context("nitrum crypto attestor")?)
+    };
+
     // Build invoke usecase.
     let invoke = Arc::new(InvokeFunction::new(catalog, artifacts, runner));
 
     // Build HTTP router.
-    let app = http::router(AppState { invoke });
+    let app = http::router(AppState { invoke, attestor });
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -65,6 +75,8 @@ async fn main() -> Result<()> {
         artifacts_endpoint = ?config.artifacts.endpoint,
         table = %config.catalog.table,
         catalog_endpoint = ?config.catalog.endpoint,
+        %run_env,
+        attestation = run_env != "local",
         "nitrum-fn host ready"
     );
 

@@ -82,12 +82,29 @@ cargo run -p host
 
 # 3. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
-curl -X POST http://127.0.0.1:8081/invoke/hello-world -H 'content-type: application/json' -d '{}'
+# Host returns x-nitrum-fn-hash (sha256 of the .wasm it compiled). Local: no Nitro quote.
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
+  --wasm ./examples/hello-world/.../hello_world.wasm
 ```
 
 End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`.
+### Verify which wasm ran
+
+The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and echoes `x-nitrum-fn-hash`. That proves the **artifact you uploaded**, not a fresh local rebuild of source.
+
+```bash
+# Local (Floci): hash header only
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --wasm ./path/to/fn.wasm
+
+# Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe`; host mints NSM user_data = H || sha256(body)
+PCR0="<pcr0 hex from nitrum build>"
+cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["eth"]}' \
+  --wasm ./examples/oracle/target/wasm32-unknown-unknown/release/oracle.wasm \
+  --pcr0 "$PCR0"
+```
+
+**Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 
 ## Cloud deploy
 

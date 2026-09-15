@@ -105,8 +105,17 @@ impl ArtifactStore for S3ArtifactStore {
     }
 
     async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.get_object(&self.wasm_key(hash), hash, MAX_WASM_BYTES)
-            .await
+        let bytes = self
+            .get_object(&self.wasm_key(hash), hash, MAX_WASM_BYTES)
+            .await?;
+        let actual = ContentHash::from_bytes(&bytes);
+        if actual != *hash {
+            return Err(AppError::HashMismatch {
+                expected: hash.to_hex(),
+                actual: actual.to_hex(),
+            });
+        }
+        Ok(bytes)
     }
 
     async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {

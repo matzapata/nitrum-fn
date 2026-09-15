@@ -2,7 +2,7 @@
 
 mod config;
 
-use std::sync::Arc;
+use crate::config::WorkerConfig;
 use anyhow::{Context, Result};
 use application::ports::{
     ArtifactStore, CompileQueue, FunctionCatalog, FunctionRunner, PublishLock,
@@ -19,9 +19,9 @@ use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use domain::PublishQueuedEvent;
 use executor::WasmtimeRunner;
 use messaging::{SqsCompileConsumer, COMPILE_VISIBILITY_TIMEOUT_SECS};
+use std::sync::Arc;
 use telemetry::{env, TelemetryConfig};
 use tracing::{error, info, warn};
-use crate::config::WorkerConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {

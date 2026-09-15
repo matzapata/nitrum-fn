@@ -51,13 +51,8 @@ mod tests {
 
     #[test]
     fn client_get_unavailable_on_native() {
-        let err = block_on(async {
-            Client::new()
-                .get("https://example.com")
-                .send()
-                .await
-        })
-        .expect_err("native");
+        let err = block_on(async { Client::new().get("https://example.com").send().await })
+            .expect_err("native");
         assert!(err.to_string().contains("wasm32"));
     }
 }

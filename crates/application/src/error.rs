@@ -46,12 +46,19 @@ pub enum AppError {
     /// Request body, wasm artifact, or guest output exceeded a product limit.
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
+
+    /// Enclave attestation (NSM / crypto API) failed.
+    #[error("attestation: {0}")]
+    Attestation(String),
 }
 
 impl AppError {
     /// True for failures whose Display may include driver or guest details.
     pub fn is_internal(&self) -> bool {
-        matches!(self, Self::Invoke(_) | Self::Trap(_) | Self::Storage(_))
+        matches!(
+            self,
+            Self::Invoke(_) | Self::Trap(_) | Self::Storage(_) | Self::Attestation(_)
+        )
     }
 
     /// Stable client-facing message. Log [`Display`] separately.

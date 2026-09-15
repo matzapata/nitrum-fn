@@ -59,9 +59,11 @@ In another terminal:
 
 ```bash
 bash examples/hello-world/deploy-local.sh
-curl -X POST http://127.0.0.1:8081/invoke/hello-world \
-  -H 'content-type: application/json' -d '{}'
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
+  --wasm examples/hello-world/target/wasm32-unknown-unknown/release/hello_world.wasm
 ```
+
+The host responds with `x-nitrum-fn-hash` (sha256 of the `.wasm` it compiled). With `--wasm` / `--expect-hash` the CLI exits non-zero on mismatch. In staging, add `--pcr0 <hex>` so the CLI requires `x-nitrum-fn-attestation` and verifies the Nitro document (`user_data` = wasm hash || sha256(body)). Rebuild the EIF after host changes that affect attestation (enclave uses Nitrum's fixed loopback crypto API when `NITRUM_FN_ENV` is not `local`).
 
 ## Staging e2e (cloud)
 

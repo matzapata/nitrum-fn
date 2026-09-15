@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use domain::{
-    EgressOrigin, HTTP_TIMEOUT, MAX_HTTP_BODY_BYTES, MAX_HTTP_URL_BYTES,
-};
+use domain::{EgressOrigin, HTTP_TIMEOUT, MAX_HTTP_BODY_BYTES, MAX_HTTP_URL_BYTES};
 use serde::Serialize;
 
 /// Result codes returned to the guest when `http_get` fails.
@@ -145,9 +143,7 @@ mod tests {
     #[test]
     fn denies_when_allowlist_empty() {
         let client = UreqClient;
-        let err = client
-            .get("https://example.com/", &[])
-            .expect_err("denied");
+        let err = client.get("https://example.com/", &[]).expect_err("denied");
         assert!(matches!(err, HttpGetError::Denied));
     }
 

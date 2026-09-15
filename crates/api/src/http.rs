@@ -68,7 +68,9 @@ fn parse_allow_headers(headers: &HeaderMap) -> Result<Vec<EgressOrigin>, HttpErr
             .map_err(|_| application::AppError::Compile("invalid allow-url header".into()))?;
         origins.push(EgressOrigin::parse(raw).map_err(application::AppError::from)?);
     }
-    normalize_egress_allow(origins).map_err(application::AppError::from).map_err(Into::into)
+    normalize_egress_allow(origins)
+        .map_err(application::AppError::from)
+        .map_err(Into::into)
 }
 
 async fn publish(
@@ -270,7 +272,10 @@ mod tests {
         let events = bus.events.lock().unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].egress_allow.len(), 1);
-        assert_eq!(events[0].egress_allow[0].as_str(), "https://api.example.com");
+        assert_eq!(
+            events[0].egress_allow[0].as_str(),
+            "https://api.example.com"
+        );
     }
 
     #[tokio::test]

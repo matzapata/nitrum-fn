@@ -81,6 +81,10 @@ mod tests {
             "--insecure",
             "-d",
             r#"{"ids":["eth"]}"#,
+            "--wasm",
+            "./oracle.wasm",
+            "--pcr0",
+            "abc",
         ])
         .expect("parse");
         match cli.command {
@@ -89,6 +93,8 @@ mod tests {
                 assert_eq!(args.url, "https://invoke.example.com");
                 assert!(args.insecure);
                 assert_eq!(args.data, r#"{"ids":["eth"]}"#);
+                assert_eq!(args.wasm, Some(PathBuf::from("./oracle.wasm")));
+                assert_eq!(args.pcr0.as_deref(), Some("abc"));
             }
             _ => panic!("expected invoke"),
         }

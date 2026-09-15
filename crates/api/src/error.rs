@@ -28,9 +28,10 @@ impl IntoResponse for HttpError {
             }
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
-            AppError::Invoke(_) | AppError::Trap(_) | AppError::Storage(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AppError::Invoke(_)
+            | AppError::Trap(_)
+            | AppError::Storage(_)
+            | AppError::Attestation(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if self.0.is_internal() {
             tracing::error!(error = %self.0, "request failed");
