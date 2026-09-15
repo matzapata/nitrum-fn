@@ -2,20 +2,22 @@
 
 End-to-end demo: a WASM price oracle runs inside a nitrum-fn enclave; a relayer
 posts the Nitro attestation on-chain; `NitrumOracle` verifies it (AWS Nitro PKI +
-PCR0 + wasm hash + body hash) and stores prices.
+PCR0 + content hash + body hash) and stores prices.
 
 ```
 examples/oracle/
   enclave/       # CoinGecko guest (.wasm) — canonical JSON body
-  contracts/     # Foundry: NitrumOracle, Deploy, UpdatePrices
+  contracts/     # Foundry: NitrumOracle, Deploy, SetEnclave, UpdatePrices
 ```
 
 Trust is **not** a Nitrum public key. It is:
 
 1. **AWS Nitro PKI** — `CertManager` / `NitroValidator` check the COSE document is signed under the pinned AWS Nitro root CA  
-2. **PCR0** — constructor pin: this EIF / enclave image  
-3. **wasm hash** — constructor pin: this `oracle.wasm`  
+2. **PCR0** — Nitro EIF / enclave image measurement (`pcr0Hash = keccak256(raw PCR0)`)  
+3. **content hash** — guest `.wasm` content hash (`sha256(wasm)` = `user_data[0:32]`). **Not** AWS PCR1 — that is a different measurement.  
 4. **body hash** — `user_data[32..64] == sha256(body)` so posted prices match the attestation  
+
+Pin (2)+(3) after deploy with `setEnclave(pcr0Hash, contentHash)`.
 
 ```mermaid
 sequenceDiagram
@@ -26,13 +28,14 @@ sequenceDiagram
   participant Oracle as NitrumOracle
   participant Reader
 
+  Relayer->>Oracle: setEnclave(pcr0Hash, contentHash)
   Relayer->>Host: POST /invoke/oracle + nonce
   Host->>Wasm: fetch CoinGecko
   Wasm-->>Host: canonical JSON body
   Host-->>Relayer: body + COSE attestation header
   Relayer->>CM: cold-cache cabundle + leaf (hints)
   Relayer->>Oracle: updatePrice(tbs, sig, hints, body)
-  Oracle->>Oracle: Nitro PKI + PCR0 + wasm + body
+  Oracle->>Oracle: Nitro PKI + PCR0 + content hash + body
   Reader->>Oracle: getPrice("eth")
 ```
 
@@ -65,10 +68,6 @@ cd examples/oracle/contracts
 
 export PRIVATE_KEY=0x…
 export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-# sha256 of the published oracle.wasm
-export EXPECTED_WASM_HASH=0x…
-# keccak256 of the raw 48-byte PCR0 from nitrum build / eif.json
-export EXPECTED_PCR0_HASH=0x…
 
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$BASE_SEPOLIA_RPC_URL" \
@@ -77,59 +76,70 @@ forge script script/Deploy.s.sol:Deploy \
 
 Note the printed `NitrumOracle` address. Optionally set `EXISTING_VALIDATOR` to reuse a shared `NitroValidator`.
 
-## 2. Invoke staging (capture attestation + body)
+## 2. Pin the enclave (`setEnclave`)
 
 ```bash
-export INVOKE_URL=https://…   # enclave NLB
-export PCR0=…                 # hex PCR0 (same image as EXPECTED_PCR0_HASH)
+export ORACLE_ADDRESS=0x…
+export PCR0=…   # 48-byte hex from nitrum build / eif.json
+# optional: WASM_PATH=../enclave/target/.../oracle.wasm
 
-bash examples/oracle/contracts/script/capture.sh
+forge script script/SetEnclave.s.sol:SetEnclave \
+  --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+  --broadcast
 ```
 
-Writes under `examples/oracle/contracts/capture/`:
+Or pass hashes directly: `PCR0_HASH=0x…` `CONTENT_HASH=0x…` (same as `x-nitrum-fn-hash`).
 
-- `body.json` / `body.hex` — canonical response  
-- `attestation.b64` / `attestation.hex` — COSE Sign1 document  
+```solidity
+oracle.setEnclave(pcr0Hash, contentHash);
+// pcr0Hash    = keccak256(48-byte PCR0)
+// contentHash = sha256(oracle.wasm)  — not PCR1
+```
 
-`capture.sh` builds the wasm if needed, invokes with `--pcr0`, and extracts the CLI’s `document=` line.
+## 3. Invoke staging (get attestation + body)
 
-Manual equivalent:
+Staging only — local host uses `NoopAttestor` and will not return a Nitro document.
 
 ```bash
+WASM=./examples/oracle/enclave/target/wasm32-unknown-unknown/release/oracle.wasm
+
+# stdout = canonical JSON body; stderr includes verified attestation
 cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure \
   -d '{"ids":["eth"]}' \
-  --wasm ./examples/oracle/enclave/target/wasm32-unknown-unknown/release/oracle.wasm \
-  --pcr0 "$PCR0"
+  --wasm "$WASM" \
+  --pcr0 "$PCR0" \
+  > body.json 2> invoke.stderr
+
+# body → BODY_HEX
+export BODY_HEX="0x$(xxd -p -c 256 body.json | tr -d '\n')"
+
+# CLI prints `document=<base64>` after a successful --pcr0 verify
+DOC_B64=$(grep -E '^[[:space:]]*document=' invoke.stderr | tail -1 | sed 's/^[[:space:]]*document=//')
+export ATTESTATION_HEX="0x$(printf '%s' "$DOC_B64" | base64 -d | xxd -p -c 256 | tr -d '\n')"
 ```
 
-## 3. Submit on-chain (`updatePrice`)
+`ATTESTATION_HEX` is the raw COSE Sign1 bytes; `BODY_HEX` must be the **exact** response bytes (no trailing newline mismatch vs what was attested).
 
-Needs **Node.js** for P-384 inverse hints (`lib/nitro-validator/tools/p384_hints.js`) and Foundry `--ffi`.
+## 4. Submit on-chain (`updatePrice`)
+
+Needs **Node.js** for P-384 inverse hints and Foundry `--ffi`.
 
 ```bash
 cd examples/oracle/contracts
 export PRIVATE_KEY=0x…
-export ORACLE_ADDRESS=0x…          # from deploy
+export ORACLE_ADDRESS=0x…
 export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-# optional: ATTESTATION_HEX / BODY_HEX — otherwise reads capture/*.hex
+# ATTESTATION_HEX + BODY_HEX from step 3
 
-# First submit for a new leaf chain: CACHE_CERTS=true (default)
 forge script script/UpdatePrices.s.sol:UpdatePrices \
   --rpc-url "$BASE_SEPOLIA_RPC_URL" \
   --broadcast \
   --ffi
 ```
 
-What the script does:
+First submit for a new leaf chain: `CACHE_CERTS=true` (default). Later: `CACHE_CERTS=false`.
 
-1. Splits COSE into `attestationTbs` + `signature`  
-2. **Cold path** (if `CACHE_CERTS=true`): `verifyCACertWithHints` / `verifyClientCertWithHints` on the attestation’s cabundle + leaf  
-3. Computes attestation signature hints  
-4. Calls `oracle.updatePrice(tbs, sig, hints, body)`  
-
-Later updates with the same cached leaf can set `CACHE_CERTS=false`.
-
-## 4. Read prices
+## 5. Read prices
 
 ```bash
 cast call "$ORACLE_ADDRESS" "getPrice(string)(uint256)" eth \
@@ -137,24 +147,19 @@ cast call "$ORACLE_ADDRESS" "getPrice(string)(uint256)" eth \
 
 cast call "$ORACLE_ADDRESS" "getPriceData(string)(uint256,uint64)" eth \
   --rpc-url "$BASE_SEPOLIA_RPC_URL"
-
-cast call "$ORACLE_ADDRESS" "hasPrice(string)(bool)" eth \
-  --rpc-url "$BASE_SEPOLIA_RPC_URL"
 ```
 
 `350012000000` → $3500.12 (8 decimals).
 
 ## How Nitro PKI verification works
 
-1. **Root** — `CertManager` pins the AWS Nitro root CA (hash + pubkey) at deploy.  
-2. **Cold path** — each intermediate in `cabundle`, then the leaf, is verified (P-384 ECDSA with off-chain inverse hints that are re-checked on-chain) and cached.  
-3. **Warm path** — `NitroValidator.validateAttestationWithHints` re-walks the cached chain and verifies the COSE document signature with the leaf pubkey.  
-4. **Oracle policy** — `NitrumOracle` then checks PCR0, freshness, wasm hash, and body hash before storing prices.
-
-Hints are a gas optimization only: a wrong hint reverts; it cannot forge a valid signature.
+1. **Root** — `CertManager` pins the AWS Nitro root CA at deploy.  
+2. **Cold path** — cabundle + leaf verified (P-384 + hints) and cached.  
+3. **Warm path** — COSE document signature checked with the leaf pubkey.  
+4. **Oracle policy** — PCR0, freshness, content hash, body hash, then store prices.
 
 ## Notes
 
+- Do not rename `contentHash` to PCR1 — AWS PCR1 is unrelated.  
 - Do not use attestation signature bytes as uniqueness keys (P-384 malleability).  
-- Production `CertManager` owner / revoker should be multisigs.  
-- Operators monitor AWS CRLs off-chain and call `revokeCert` when needed.
+- Production `CertManager` owner / revoker should be multisigs.

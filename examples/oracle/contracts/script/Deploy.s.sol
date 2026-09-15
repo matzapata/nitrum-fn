@@ -13,20 +13,18 @@ import {NitrumOracle} from "../src/NitrumOracle.sol";
 ///
 /// Env:
 ///   PRIVATE_KEY
-///   EXPECTED_PCR0_HASH   keccak256 of the 48-byte PCR0
-///   EXPECTED_WASM_HASH   sha256 of the published oracle.wasm
 ///   MAX_AGE_SECONDS      optional, default 3600
 ///   CERT_OWNER / CERT_REVOKER  optional, default broadcaster
 ///   EXISTING_VALIDATOR   optional — reuse a deployed NitroValidator
+///
+/// After deploy, pin the enclave:
+///   oracle.setEnclave(keccak256(pcr0), sha256(wasm))
 ///
 ///   forge script script/Deploy.s.sol:Deploy --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast
 contract Deploy is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address broadcaster = vm.addr(pk);
-
-        bytes32 pcr0Hash = vm.envBytes32("EXPECTED_PCR0_HASH");
-        bytes32 wasmHash = vm.envBytes32("EXPECTED_WASM_HASH");
         uint256 maxAge = vm.envOr("MAX_AGE_SECONDS", uint256(3600));
 
         vm.startBroadcast(pk);
@@ -50,10 +48,9 @@ contract Deploy is Script {
             console2.log("NitroValidator", address(nv));
         }
 
-        NitrumOracle oracle = new NitrumOracle(validator, pcr0Hash, wasmHash, maxAge);
+        NitrumOracle oracle = new NitrumOracle(validator, maxAge);
         console2.log("NitrumOracle", address(oracle));
-        console2.logBytes32(oracle.expectedPcr0Hash());
-        console2.logBytes32(oracle.expectedWasmHash());
+        console2.log("next: setEnclave(pcr0Hash, contentHash)");
 
         vm.stopBroadcast();
     }

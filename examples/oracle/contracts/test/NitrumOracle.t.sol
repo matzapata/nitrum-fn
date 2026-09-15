@@ -12,7 +12,7 @@ contract NitrumOracleTest is Test {
     NitrumOracle internal oracle;
 
     bytes32 internal pcr0Hash;
-    bytes32 internal wasmHash;
+    bytes32 internal contentHash;
     bytes internal pcr0;
     bytes internal body;
     bytes internal attestationTbs;
@@ -26,15 +26,33 @@ contract NitrumOracleTest is Test {
         require(pcr0.length == 48, "pcr0 len");
         pcr0Hash = keccak256(pcr0);
 
-        wasmHash = keccak256("oracle.wasm");
+        contentHash = keccak256("oracle.wasm");
         body = bytes('{"ids":["eth"],"prices":[350012000000]}');
 
         bytes32 bodyHash = sha256(body);
-        bytes memory userData = bytes.concat(abi.encodePacked(wasmHash), abi.encodePacked(bodyHash));
+        bytes memory userData = bytes.concat(abi.encodePacked(contentHash), abi.encodePacked(bodyHash));
         attestationTbs = bytes.concat(pcr0, userData);
 
-        oracle = new NitrumOracle(mock, pcr0Hash, wasmHash, MAX_AGE);
+        oracle = new NitrumOracle(mock, MAX_AGE);
+        oracle.setEnclave(pcr0Hash, contentHash);
         mock.setTimestampMs(uint64(block.timestamp * 1000));
+    }
+
+    function test_revert_enclaveNotSet() public {
+        NitrumOracle unset = new NitrumOracle(mock, MAX_AGE);
+        vm.expectRevert(NitrumOracle.EnclaveNotSet.selector);
+        unset.updatePrice(attestationTbs, "", "", body);
+    }
+
+    function test_setEnclave() public {
+        assertEq(oracle.pcr0Hash(), pcr0Hash);
+        assertEq(oracle.contentHash(), contentHash);
+
+        bytes32 otherPcr0 = keccak256("other-pcr0");
+        bytes32 otherContent = keccak256("other-wasm");
+        oracle.setEnclave(otherPcr0, otherContent);
+        assertEq(oracle.pcr0Hash(), otherPcr0);
+        assertEq(oracle.contentHash(), otherContent);
     }
 
     function test_updatePrice_andGetters() public {
@@ -54,7 +72,7 @@ contract NitrumOracleTest is Test {
     function test_updatePrice_multipleIds() public {
         body = bytes('{"ids":["eth","btc"],"prices":[1,2]}');
         bytes32 bodyHash = sha256(body);
-        bytes memory userData = bytes.concat(abi.encodePacked(wasmHash), abi.encodePacked(bodyHash));
+        bytes memory userData = bytes.concat(abi.encodePacked(contentHash), abi.encodePacked(bodyHash));
         attestationTbs = bytes.concat(pcr0, userData);
 
         oracle.updatePrice(attestationTbs, "", "", body);
@@ -66,7 +84,7 @@ contract NitrumOracleTest is Test {
         bytes memory badPcr0 =
             hex"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
         bytes32 bodyHash = sha256(body);
-        bytes memory userData = bytes.concat(abi.encodePacked(wasmHash), abi.encodePacked(bodyHash));
+        bytes memory userData = bytes.concat(abi.encodePacked(contentHash), abi.encodePacked(bodyHash));
         bytes memory tbs = bytes.concat(badPcr0, userData);
 
         vm.expectRevert(NitrumOracle.InvalidPcr0.selector);
@@ -76,20 +94,20 @@ contract NitrumOracleTest is Test {
     function test_revert_debugPcr0() public {
         bytes memory zeroPcr0 = new bytes(48);
         bytes32 bodyHash = sha256(body);
-        bytes memory userData = bytes.concat(abi.encodePacked(wasmHash), abi.encodePacked(bodyHash));
+        bytes memory userData = bytes.concat(abi.encodePacked(contentHash), abi.encodePacked(bodyHash));
         bytes memory tbs = bytes.concat(zeroPcr0, userData);
 
         vm.expectRevert(NitrumOracle.DebugPcr0.selector);
         oracle.updatePrice(tbs, "", "", body);
     }
 
-    function test_revert_wasmHashMismatch() public {
-        bytes32 wrongWasm = keccak256("other.wasm");
+    function test_revert_contentHashMismatch() public {
+        bytes32 wrongContent = keccak256("other.wasm");
         bytes32 bodyHash = sha256(body);
-        bytes memory userData = bytes.concat(abi.encodePacked(wrongWasm), abi.encodePacked(bodyHash));
+        bytes memory userData = bytes.concat(abi.encodePacked(wrongContent), abi.encodePacked(bodyHash));
         bytes memory tbs = bytes.concat(pcr0, userData);
 
-        vm.expectRevert(NitrumOracle.WasmHashMismatch.selector);
+        vm.expectRevert(NitrumOracle.ContentHashMismatch.selector);
         oracle.updatePrice(tbs, "", "", body);
     }
 

@@ -7,10 +7,14 @@ import {NitroValidator} from "@nitro-validator/NitroValidator.sol";
 import {CanonicalPriceJson} from "./CanonicalPriceJson.sol";
 import {INitroAttestationValidator} from "./INitroAttestationValidator.sol";
 
-/// @notice Demo oracle: verify Nitro attestation (PCR0 + wasm hash + body hash), then store prices.
+/// @notice Demo oracle: verify Nitro attestation (PCR0 + content hash + body hash), then store prices.
 ///
 /// Host `user_data` (64 bytes): `sha256(wasm) || sha256(response body)`.
 /// Body: `{"ids":["eth"],"prices":[350012000000]}` (USD × 1e8, no whitespace).
+///
+/// Pin the trusted enclave via {setEnclave} before {updatePrice}.
+/// Do **not** call the content-hash pin "PCR1" — AWS PCR1 is a different Nitro measurement;
+/// this value is the guest `.wasm` content hash from nitrum-fn `user_data`.
 ///
 /// PRECONDITION: CertManager must already have the attestation cert chain cached
 /// (cold path) before {updatePrice}.
@@ -21,18 +25,24 @@ contract NitrumOracle {
     uint256 public constant PRICE_DECIMALS = 8;
 
     INitroAttestationValidator public immutable validator;
-    /// @dev keccak256 of the trusted 48-byte PCR0.
-    bytes32 public immutable expectedPcr0Hash;
-    /// @dev sha256 of the trusted oracle.wasm (first 32 bytes of user_data).
-    bytes32 public immutable expectedWasmHash;
     uint256 public immutable maxAge;
+
+    address public owner;
+    /// @dev keccak256 of the trusted 48-byte Nitro PCR0 (EIF measurement).
+    bytes32 public pcr0Hash;
+    /// @dev sha256 of the trusted oracle.wasm (first 32 bytes of attestation user_data).
+    bytes32 public contentHash;
 
     uint64 public lastTimestampMs;
     mapping(string => uint256) private _price;
     mapping(string => uint64) private _priceTimestampMs;
 
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event EnclaveSet(bytes32 pcr0Hash, bytes32 contentHash);
     event PriceUpdated(string id, uint256 price, uint64 timestampMs);
 
+    error NotOwner();
+    error EnclaveNotSet();
     error MissingPcr0();
     error InvalidPcr0();
     error DebugPcr0();
@@ -40,25 +50,40 @@ contract NitrumOracle {
     error StaleTimestamp();
     error MissingUserData();
     error InvalidUserDataLength();
-    error WasmHashMismatch();
+    error ContentHashMismatch();
     error BodyHashMismatch();
     error CanonicalBodyMismatch();
     error UnknownId();
 
-    constructor(
-        INitroAttestationValidator validator_,
-        bytes32 expectedPcr0Hash_,
-        bytes32 expectedWasmHash_,
-        uint256 maxAge_
-    ) {
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    constructor(INitroAttestationValidator validator_, uint256 maxAge_) {
         require(address(validator_) != address(0), "missing validator");
-        require(expectedPcr0Hash_ != bytes32(0), "missing pcr0");
-        require(expectedWasmHash_ != bytes32(0), "missing wasm hash");
         require(maxAge_ > 0, "missing max age");
         validator = validator_;
-        expectedPcr0Hash = expectedPcr0Hash_;
-        expectedWasmHash = expectedWasmHash_;
         maxAge = maxAge_;
+        owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
+    }
+
+    /// @notice Pin the trusted Nitro image (PCR0) and guest wasm content hash.
+    /// @param pcr0Hash_ `keccak256` of the 48-byte PCR0 from `nitrum build` / eif.json.
+    /// @param contentHash_ `sha256` of the published `.wasm` (matches `x-nitrum-fn-hash` / user_data[0:32]).
+    function setEnclave(bytes32 pcr0Hash_, bytes32 contentHash_) external onlyOwner {
+        require(pcr0Hash_ != bytes32(0), "missing pcr0");
+        require(contentHash_ != bytes32(0), "missing content hash");
+        pcr0Hash = pcr0Hash_;
+        contentHash = contentHash_;
+        emit EnclaveSet(pcr0Hash_, contentHash_);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "zero owner");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
 
     /// @notice Verify attestation policy, then write attested prices.
@@ -68,6 +93,8 @@ contract NitrumOracle {
         bytes calldata attestationHints,
         bytes calldata body
     ) external {
+        if (pcr0Hash == bytes32(0) || contentHash == bytes32(0)) revert EnclaveNotSet();
+
         bytes memory tbs = attestationTbs;
         bytes memory bodyMem = body;
 
@@ -113,7 +140,7 @@ contract NitrumOracle {
         if (ptrs.pcrs.length == 0 || ptrs.pcrs[0].isNull()) revert MissingPcr0();
         bytes memory pcr0 = attestationTbs.slice(ptrs.pcrs[0]);
         if (_isAllZero(pcr0)) revert DebugPcr0();
-        if (keccak256(pcr0) != expectedPcr0Hash) revert InvalidPcr0();
+        if (keccak256(pcr0) != pcr0Hash) revert InvalidPcr0();
     }
 
     function _checkFreshness(uint64 timestampMs) private view {
@@ -129,13 +156,13 @@ contract NitrumOracle {
         bytes memory userData = attestationTbs.slice(ptrs.userData);
         if (userData.length != 64) revert InvalidUserDataLength();
 
-        bytes32 wasmHash;
+        bytes32 gotContentHash;
         bytes32 bodyHash;
         assembly ("memory-safe") {
-            wasmHash := mload(add(userData, 32))
+            gotContentHash := mload(add(userData, 32))
             bodyHash := mload(add(userData, 64))
         }
-        if (wasmHash != expectedWasmHash) revert WasmHashMismatch();
+        if (gotContentHash != contentHash) revert ContentHashMismatch();
         if (bodyHash != sha256(body)) revert BodyHashMismatch();
     }
 

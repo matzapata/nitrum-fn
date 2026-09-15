@@ -28,8 +28,8 @@ contract NitroValidatorScriptParser is NitroValidator {
 /// Env:
 ///   PRIVATE_KEY
 ///   ORACLE_ADDRESS
-///   ATTESTATION_HEX   0x-prefixed COSE Sign1 (or omit and use capture/attestation.hex)
-///   BODY_HEX          0x-prefixed canonical JSON body (or omit and use capture/body.hex)
+///   ATTESTATION_HEX   0x-prefixed COSE Sign1 document
+///   BODY_HEX          0x-prefixed canonical JSON body
 ///   CACHE_CERTS       optional bool, default true
 ///
 ///   forge script script/UpdatePrices.s.sol:UpdatePrices \
@@ -44,8 +44,10 @@ contract UpdatePrices is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         NitrumOracle oracle = NitrumOracle(vm.envAddress("ORACLE_ADDRESS"));
-        bytes memory attestation = _loadBytes("ATTESTATION_HEX", "capture/attestation.hex");
-        bytes memory body = _loadBytes("BODY_HEX", "capture/body.hex");
+        bytes memory attestation = vm.envBytes("ATTESTATION_HEX");
+        bytes memory body = vm.envBytes("BODY_HEX");
+        require(attestation.length > 0, "set ATTESTATION_HEX");
+        require(body.length > 0, "set BODY_HEX");
         bool cacheCerts = vm.envOr("CACHE_CERTS", true);
 
         NitroValidatorScriptParser parser = new NitroValidatorScriptParser();
@@ -77,14 +79,6 @@ contract UpdatePrices is Script {
         console2.log("updatePrice submitted");
 
         vm.stopBroadcast();
-    }
-
-    function _loadBytes(string memory envKey, string memory fallbackPath) internal view returns (bytes memory) {
-        try vm.envBytes(envKey) returns (bytes memory fromEnv) {
-            if (fromEnv.length > 0) return fromEnv;
-        } catch {}
-        string memory raw = vm.readFile(fallbackPath);
-        return vm.parseBytes(raw);
     }
 
     function _runColdHintedCache(
