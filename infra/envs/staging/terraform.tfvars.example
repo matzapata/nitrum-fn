@@ -7,7 +7,7 @@ retain       = false
 # false = network + store + API + worker. Set true after you have an EIF + PCR0.
 enable_enclave = false
 
-# Defaults are GHCR (CI publishes these). Override for Docker Hub or another registry:
+# Defaults are GHCR (the Release workflow publishes these on v* tags). Override for Docker Hub or another registry:
 # api_image    = "matzapata/nitrum-fn-api:latest"
 # worker_image = "matzapata/nitrum-fn-publish-worker:latest"
 

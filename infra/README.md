@@ -44,7 +44,7 @@ cp terraform.tfvars.example terraform.tfvars
 
 ## 1. Network + store + API + worker (no enclaves)
 
-Fargate pulls **public** images. Defaults are GHCR (`ghcr.io/matzapata/nitrum-fn/api:latest` and `…/publish-worker:latest`), published by CI on `main`. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry. Make GHCR packages public so ECS can pull without a PAT.
+Fargate pulls **public** images. Defaults are GHCR (`ghcr.io/matzapata/nitrum-fn/api:latest` and `…/publish-worker:latest`), published by the [Release workflow](../.github/workflows/release.yml) on `v*` tags. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry. Make GHCR packages public so ECS can pull without a PAT. Pin to the release tag (not `:latest`) when you want a specific cut.
 
 ```bash
 cd infra/envs/staging
@@ -102,7 +102,7 @@ Or run the cloud e2e (publish via ALB, invoke via NLB):
 
 ## Every enclave release
 
-`nitrum build`, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. Terraform re-uploads the EIF; the launch template name changes and the ASG rolls.
+Prefer the EIF attached to the GitHub Release (`nitrum-fn.eif` + `nitrum-fn.eif.json`). Copy it to `.nitrum/artifacts/nitrum-fn.eif`, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. Terraform re-uploads the EIF; the launch template name changes and the ASG rolls. `nitrum build` locally only when you want a new PCR0.
 
 ## Layout vs trust
 

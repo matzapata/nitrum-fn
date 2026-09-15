@@ -1,5 +1,5 @@
 # Fargate publish worker (`nitrum-fn-publish-worker`). Must be musl so .cwasm matches the enclave.
-# Published to GHCR by CI (`ghcr.io/matzapata/nitrum-fn/publish-worker`).
+# Published to GHCR by the Release workflow (`ghcr.io/matzapata/nitrum-fn/publish-worker`).
 # Build: docker build --platform linux/amd64 -f Dockerfile.publish-worker -t … .
 FROM --platform=linux/amd64 rust:1.95-bookworm AS builder
 

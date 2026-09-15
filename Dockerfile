@@ -1,5 +1,6 @@
 # Enclave image for `nitrum build` (always `docker build -f Dockerfile`).
 # Data-plane is Alpine/musl, so the host is built for x86_64-unknown-linux-musl.
+# Published to GHCR by the Release workflow (`ghcr.io/matzapata/nitrum-fn/host`).
 # Fargate API image: Dockerfile.api.
 # DATA_PLANE_IMAGE comes from [runtime].data_plane in nitrum.toml.
 
