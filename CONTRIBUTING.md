@@ -79,7 +79,7 @@ make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=dev
 make publish-worker WORKER_IMAGE=docker.io/you/nitrum-fn-worker:custom   # API_IMAGE=... / HOST_IMAGE=...
 ```
 
-Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml): CI, then GHCR `…/{api,publish-worker,host}:latest` / `:$tag` / `:$sha`, then `nitrum build`. The GitHub Release attaches `nitrum-fn.eif` and `nitrum-fn.eif.json` (sha256 + PCR0). Packages must be **public** so ECS can pull without a PAT. Pin `api_image` / `worker_image` in `terraform.tfvars` to the release tag.
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml): CI, then parallel jobs **`api`**, **`publisher`**, **`host`**, and **`cli`**. GHCR remains `…/{api,publish-worker,host}:latest` / `:$tag` / `:$sha`. The GitHub Release attaches `nitrum-fn.eif`, `nitrum-fn.eif.json` (sha256 + PCR0), and CLI binaries (`nitrum-fn-linux-x86_64`, `nitrum-fn-darwin-aarch64`, `nitrum-fn-windows-x86_64.exe`). Packages must be **public** so ECS can pull without a PAT. Pin `api_image` / `worker_image` in `terraform.tfvars` to the release tag.
 
 The publish-worker is musl so `.cwasm` matches the enclave. After rolling a new **worker** image, **republish** functions. If Terraform still pins `:latest`, force ECS redeploy:
 
@@ -113,9 +113,18 @@ make e2e-cloud
 
 ## Releases
 
-Push a SemVer tag (`vMAJOR.MINOR.PATCH`). The [Release workflow](.github/workflows/release.yml) re-runs CI, publishes GHCR images, builds the EIF, and creates a GitHub Release.
+Push a SemVer tag (`vMAJOR.MINOR.PATCH`). The [Release workflow](.github/workflows/release.yml) re-runs CI, then:
 
-1. **Fargate (api + publish-worker)** — pin `api_image` / `worker_image` to `:$tag`. Force ECS redeploy if the URI is still `:latest`.
-2. **Enclave (host)** — download `nitrum-fn.eif` from the release into `.nitrum/artifacts/`, copy `eif_version_label` / `eif_image_sha384` from `nitrum-fn.eif.json` (or the release notes), `terraform apply`. Rebuild with `nitrum build` only when you want a new PCR0.
+| Job | Publishes |
+| --- | --- |
+| `api` | GHCR `…/api` |
+| `publisher` | GHCR `…/publish-worker` (crate/Dockerfile name unchanged) |
+| `host` | GHCR `…/host` + EIF + measurements |
+| `cli` | `nitrum-fn-{linux-x86_64,darwin-aarch64,windows-x86_64.exe}` |
+
+Install the CLI: `curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-fn/main/scripts/install-nitrum-fn.sh | bash` (or `NITRUM_FN_VERSION=v…`).
+
+1. **Fargate (`api` + `publisher`)** — pin `api_image` / `worker_image` to `:$tag`. Force ECS redeploy if the URI is still `:latest`.
+2. **Host** — download `nitrum-fn.eif` from the release into `.nitrum/artifacts/`, copy `eif_version_label` / `eif_image_sha384` from `nitrum-fn.eif.json` (or the release notes), `terraform apply`. Rebuild with `nitrum build` only when you want a new PCR0.
 
 

@@ -6,7 +6,7 @@ content hash + body hash) and stores prices.
 
 Demo (deploy function → invoke → `updatePrice` → `getPrice`):
 
-<video src="demo.mp4" controls width="100%"></video>
+<video src="../../docs/assets/oracle-demo.mp4" controls width="100%"></video>
 
 ```
 examples/oracle/
@@ -118,7 +118,7 @@ oracle.setEnclave(pcr0Hash, contentHash);
 
 ## 3–5. Deploy function → invoke → on-chain → read
 
-The [demo video](demo.mp4) walks through `cli deploy`, invoke, on-chain submit, and `getPrice`.
+The [demo video](../../docs/assets/oracle-demo.mp4) walks through `cli deploy`, invoke, on-chain submit, and `getPrice`.
 
 Reference notes:
 

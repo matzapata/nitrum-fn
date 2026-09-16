@@ -4,7 +4,20 @@ WASM functions on [Nitrum](https://github.com/nitrum) enclaves.
 
 Develop, test, and run staging e2e: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
-`nitrum-fn` is the functions product that runs on Nitrum: developers publish `.wasm`, callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave, and the host runs the guest with Wasmtime. Nitrum stays the platform (EIF, TLS/ACME, attestation, ASG/NLB). This repo is the WASM host, catalog, and CLI.
+- **[Architecture](docs/architecture.md)** — platform, trust boundary, crates, publish/invoke pipelines.
+- **[Usage](docs/usage.md)** — write a function, config, deploy, invoke, Solidity verification.
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-fn/main/scripts/install-nitrum-fn.sh | bash
+# pin a release: NITRUM_FN_VERSION=v0.1.0 bash …
+# from source: cargo install --git https://github.com/matzapata/nitrum-fn --locked --bin nitrum-fn
+```
+
+Prebuilt binaries ship on GitHub Releases for Linux x86_64, macOS Apple Silicon, and Windows x86_64. Contributors working in this repo can keep using `cargo run -p cli -- …`.
+
+`nitrum-fn` is the functions product that runs on Nitrum: developers publish `.wasm`, callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave, and the host runs the guest with Wasmtime. Nitrum stays the platform (EIF, TLS/ACME, attestation, ASG/NLB). This repo is the WASM host, catalog, CLI, and later payments.
 
 ## Features
 
@@ -112,7 +125,7 @@ cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["et
   --attestation-out attestation.bin
 ```
 
-On-chain consumer (Foundry + `base/nitro-validator`): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`examples/oracle/demo.mp4`](examples/oracle/demo.mp4).
+On-chain consumer (Foundry + `base/nitro-validator`): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`docs/assets/oracle-demo.mp4`](docs/assets/oracle-demo.mp4).
 
 **Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 
