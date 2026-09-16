@@ -128,10 +128,17 @@ meta="$(curl -sf "${API_URL}/functions/hello-world")" \
 echo "$meta" | grep -q '"name":"hello-world"' || fail "metadata name: $meta"
 pass "function metadata"
 
-echo "==> invoke after deploy (verify x-nitrum-fn-hash)"
+echo "==> CLI describe"
 EXPECTED_HASH="$(shasum -a 256 "$WASM_SRC" | awk '{print $1}')"
+desc="$(cargo run -p cli --quiet -- describe "$WASM_SRC")" \
+  || { dump_logs; fail "describe failed"; }
+echo "$desc" | grep -q "^hash=${EXPECTED_HASH}$" \
+  || fail "describe hash mismatch (expected ${EXPECTED_HASH}): ${desc}"
+pass "describe (content hash)"
+
+echo "==> invoke after deploy (verify x-nitrum-fn-hash)"
 body="$(cargo run -p cli --quiet -- invoke hello-world --url "$HOST_URL" -d '{}' \
-  --wasm "$WASM_SRC" 2>"$DATA_DIR/invoke.err")" \
+  --fn-shasum "$EXPECTED_HASH" 2>"$DATA_DIR/invoke.err")" \
   || { dump_logs; cat "$DATA_DIR/invoke.err" >&2 || true; fail "invoke failed"; }
 
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"

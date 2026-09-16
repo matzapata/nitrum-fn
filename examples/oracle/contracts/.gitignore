@@ -3,3 +3,7 @@ out/
 broadcast/
 docs/
 .env
+body.json
+invoke.stderr
+attestation.bin
+updatePrice.data

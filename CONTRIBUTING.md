@@ -48,8 +48,11 @@ Then:
 
 ```bash
 bash examples/hello-world/deploy-local.sh
+HASH=$(cargo run -p cli --quiet -- describe \
+  examples/hello-world/target/wasm32-unknown-unknown/release/hello_world.wasm \
+  | awk -F= '/^hash=/{print $2}')
 cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
-  --wasm examples/hello-world/target/wasm32-unknown-unknown/release/hello_world.wasm
+  --fn-shasum "$HASH"
 ```
 
 Automated: `make e2e`. Tear down emulators: `make stack-down`.

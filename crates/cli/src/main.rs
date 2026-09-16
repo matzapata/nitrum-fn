@@ -1,11 +1,11 @@
 use clap::Parser;
-use cli::commands::{deploy, invoke};
+use cli::commands::{deploy, describe, invoke};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "nitrum-fn")]
 #[command(
-    about = "Deploy and invoke WASM functions on nitrum-fn",
+    about = "Deploy, invoke, and describe WASM functions on nitrum-fn",
     long_about = None
 )]
 struct Cli {
@@ -17,6 +17,8 @@ struct Cli {
 enum Commands {
     /// Deploy a WASM function
     Deploy(deploy::DeployArgs),
+    /// Print sha256 of a local `.wasm` (same as `x-nitrum-fn-hash` / `--fn-shasum`)
+    Describe(describe::DescribeArgs),
     /// Invoke a deployed function
     Invoke(invoke::InvokeArgs),
 }
@@ -29,6 +31,7 @@ async fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Deploy(args) => deploy::run(args).await,
+        Commands::Describe(args) => describe::run(args).await,
         Commands::Invoke(args) => invoke::run(args).await,
     };
 
@@ -71,6 +74,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_describe() {
+        let cli = Cli::try_parse_from(["nitrum-fn", "describe", "./oracle.wasm"]).expect("parse");
+        match cli.command {
+            Commands::Describe(args) => {
+                assert_eq!(args.wasm, PathBuf::from("./oracle.wasm"));
+            }
+            _ => panic!("expected describe"),
+        }
+    }
+
+    #[test]
     fn parses_invoke() {
         let cli = Cli::try_parse_from([
             "nitrum-fn",
@@ -81,10 +95,12 @@ mod tests {
             "--insecure",
             "-d",
             r#"{"ids":["eth"]}"#,
-            "--wasm",
-            "./oracle.wasm",
+            "--fn-shasum",
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
             "--pcr0",
             "abc",
+            "--attestation-out",
+            "./attestation.bin",
         ])
         .expect("parse");
         match cli.command {
@@ -93,10 +109,67 @@ mod tests {
                 assert_eq!(args.url, "https://invoke.example.com");
                 assert!(args.insecure);
                 assert_eq!(args.data, r#"{"ids":["eth"]}"#);
-                assert_eq!(args.wasm, Some(PathBuf::from("./oracle.wasm")));
+                assert_eq!(
+                    args.fn_shasum.as_deref(),
+                    Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+                );
                 assert_eq!(args.pcr0.as_deref(), Some("abc"));
+                assert_eq!(
+                    args.attestation_out,
+                    Some(PathBuf::from("./attestation.bin"))
+                );
             }
             _ => panic!("expected invoke"),
         }
+    }
+
+    #[test]
+    fn invoke_accepts_expect_hash_alias() {
+        let cli = Cli::try_parse_from([
+            "nitrum-fn",
+            "invoke",
+            "oracle",
+            "--expect-hash",
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+        ])
+        .expect("parse");
+        match cli.command {
+            Commands::Invoke(args) => {
+                assert_eq!(
+                    args.fn_shasum.as_deref(),
+                    Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+                );
+            }
+            _ => panic!("expected invoke"),
+        }
+    }
+
+    #[test]
+    fn invoke_pcr0_requires_fn_shasum() {
+        let err = match Cli::try_parse_from(["nitrum-fn", "invoke", "oracle", "--pcr0", "abc"]) {
+            Ok(_) => panic!("pcr0 requires fn-shasum"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fn-shasum") || msg.contains("--fn-shasum"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn invoke_attestation_out_requires_pcr0() {
+        let err = match Cli::try_parse_from([
+            "nitrum-fn",
+            "invoke",
+            "oracle",
+            "--attestation-out",
+            "./attestation.bin",
+        ]) {
+            Ok(_) => panic!("attestation-out requires pcr0"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("pcr0") || msg.contains("--pcr0"), "{msg}");
     }
 }

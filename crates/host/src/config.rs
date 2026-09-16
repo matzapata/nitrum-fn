@@ -10,7 +10,7 @@ pub struct HostConfig {
     pub server: ServerConfig,
     pub artifacts: ArtifactsConfig,
     pub catalog: CatalogConfig,
-    
+
     /// Overlay name that was loaded (`NITRUM_FN_ENV`, else `local`); not itself a
     /// config source, stamped on after deserializing so callers don't re-derive it.
     #[serde(default, skip_deserializing)]

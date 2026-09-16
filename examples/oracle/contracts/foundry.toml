@@ -6,10 +6,7 @@ solc_version = "0.8.26"
 optimizer = true
 optimizer_runs = 200
 ffi = false
-fs_permissions = [
-    { access = "read", path = "./" },
-    { access = "read", path = "../enclave" },
-]
+fs_permissions = [{ access = "read-write", path = "./" }]
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "@nitro-validator/=lib/nitro-validator/src/",

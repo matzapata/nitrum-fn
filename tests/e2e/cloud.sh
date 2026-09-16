@@ -152,12 +152,14 @@ wait_http() {
     local deadline now remaining sleep_for rc
     deadline=$((SECONDS + timeout_seconds))
     local -a curl_args
-    curl_args=(-sS -o /dev/null --connect-timeout 5 --max-time 10)
+    # Do not treat TCP success as ready: ALB 503 (no healthy targets) is still
+    # curl exit 0. Require HTTP 200, matching the target-group health check.
+    curl_args=(-sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10)
 
     while true; do
-        rc=0
-        curl "${curl_args[@]}" "${url}" || rc=$?
-        if ((rc == 0)); then
+        local rc=0 code="000"
+        code="$(curl "${curl_args[@]}" "${url}")" || rc=$?
+        if ((rc == 0)) && [[ "${code}" == "200" ]]; then
             echo "=== ${label} ready ==="
             return 0
         fi
@@ -171,7 +173,7 @@ wait_http() {
         fi
 
         remaining=$((deadline - now))
-        echo "waiting for ${label}... (${remaining}s remaining)"
+        echo "waiting for ${label}... http=${code} rc=${rc} (${remaining}s remaining)"
         sleep_for="${POLL_SECONDS}"
         if ((remaining < POLL_SECONDS)); then
             sleep_for="${remaining}"
@@ -252,10 +254,10 @@ step_wait_enclave() {
 
     echo "=== wait enclave (timeout ${INVOKE_TIMEOUT}s): ${INVOKE_URL} ==="
 
-    local deadline now remaining sleep_for rc_status rc_health
+    local deadline now remaining sleep_for rc_status rc_health code_status code_health
     deadline=$((SECONDS + INVOKE_TIMEOUT))
     local -a curl_args
-    curl_args=(-sS -o /dev/null --connect-timeout 5 --max-time 10)
+    curl_args=(-sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10)
     if [[ "${ENCLAVE_TLS_INSECURE}" == "1" ]]; then
         curl_args+=(-k)
     fi
@@ -263,13 +265,15 @@ step_wait_enclave() {
     while true; do
         rc_status=0
         rc_health=0
-        curl "${curl_args[@]}" "${status_url}" || rc_status=$?
-        if ((rc_status == 0)); then
+        code_status="000"
+        code_health="000"
+        code_status="$(curl "${curl_args[@]}" "${status_url}")" || rc_status=$?
+        if ((rc_status == 0)) && [[ "${code_status}" == "200" ]]; then
             echo "=== enclave is responsive ==="
             return 0
         fi
-        curl "${curl_args[@]}" "${health_url}" || rc_health=$?
-        if ((rc_health == 0)); then
+        code_health="$(curl "${curl_args[@]}" "${health_url}")" || rc_health=$?
+        if ((rc_health == 0)) && [[ "${code_health}" == "200" ]]; then
             echo "=== enclave is responsive ==="
             return 0
         fi
@@ -293,7 +297,7 @@ step_wait_enclave() {
 }
 
 step_tests() {
-    local headers body code err bad_hash bad_pcr0
+    local headers body code err bad_hash bad_pcr0 desc hash
 
     invoke_curl_args
 
@@ -313,32 +317,41 @@ step_tests() {
         -d '{}')"
     [[ "${code}" == "404" ]] || die "expected 404 for missing fn, got ${code}"
 
-    echo "=== CLI invoke --wasm (hash only) ==="
+    echo "=== CLI describe ==="
+    desc="$(cli describe "${WASM_SRC}")" || die "CLI describe failed"
+    hash="$(printf '%s\n' "${desc}" | awk -F= '/^hash=/{print $2}')"
+    [[ -n "${hash}" ]] || die "describe missing hash=: ${desc}"
+
+    echo "=== CLI invoke --fn-shasum ==="
     err="$(mktemp)"
     body="$(cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
-        --wasm "${WASM_SRC}" 2>"${err}")" \
-        || { cat "${err}" >&2; die "CLI invoke --wasm failed"; }
-    [[ "${body}" == "${EXPECTED_BODY}" ]] || die "CLI --wasm body: ${body}"
+        --fn-shasum "${hash}" 2>"${err}")" \
+        || { cat "${err}" >&2; die "CLI invoke --fn-shasum failed"; }
+    [[ "${body}" == "${EXPECTED_BODY}" ]] || die "CLI --fn-shasum body: ${body}"
     grep -q 'x-nitrum-fn-hash=' "${err}" || die "missing x-nitrum-fn-hash on stderr: $(cat "${err}")"
     if grep -q 'attestation: ok' "${err}"; then
         die "unexpected attestation verify without --pcr0: $(cat "${err}")"
     fi
     cat "${err}" >&2
 
-    echo "=== CLI invoke --wasm --pcr0 (NSM attestation) ==="
+    echo "=== CLI invoke --fn-shasum --pcr0 (NSM attestation) ==="
+    att="$(mktemp)"
     body="$(cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
-        --wasm "${WASM_SRC}" --pcr0 "${PCR0}" 2>"${err}")" \
+        --fn-shasum "${hash}" --pcr0 "${PCR0}" --attestation-out "${att}" 2>"${err}")" \
         || { cat "${err}" >&2; die "CLI invoke --pcr0 failed"; }
     [[ "${body}" == "${EXPECTED_BODY}" ]] || die "CLI --pcr0 body: ${body}"
-    grep -q 'attestation: ok' "${err}" || die "missing attestation ok: $(cat "${err}")"
-    echo "--- NSM verification ---" >&2
-    cat "${err}" >&2
-    echo "------------------------" >&2
+    [[ -s "${att}" ]] || die "empty --attestation-out file"
+    if grep -qE 'x-nitrum-fn-hash=|attestation: ok|document=|written=' "${err}"; then
+        die "expected silent stderr with --attestation-out: $(cat "${err}")"
+    fi
+    echo "--- NSM attestation written ---" >&2
+    wc -c "${att}" >&2
+    echo "-------------------------------" >&2
 
-    echo "=== negative: wrong --expect-hash ==="
+    echo "=== negative: wrong --fn-shasum ==="
     bad_hash="$(printf '0%.0s' {1..64})"
     if cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
-        --expect-hash "${bad_hash}" --pcr0 "${PCR0}" >/dev/null 2>"${err}"; then
+        --fn-shasum "${bad_hash}" --pcr0 "${PCR0}" >/dev/null 2>"${err}"; then
         die "expected hash mismatch to fail"
     fi
     grep -qi 'hash mismatch' "${err}" || die "expected hash mismatch error: $(cat "${err}")"
@@ -346,7 +359,7 @@ step_tests() {
     echo "=== negative: wrong --pcr0 ==="
     bad_pcr0="$(printf '0%.0s' {1..96})"
     if cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
-        --wasm "${WASM_SRC}" --pcr0 "${bad_pcr0}" >/dev/null 2>"${err}"; then
+        --fn-shasum "${hash}" --pcr0 "${bad_pcr0}" >/dev/null 2>"${err}"; then
         die "expected PCR0 mismatch to fail"
     fi
     grep -qiE 'attestation verify failed|PCR' "${err}" \

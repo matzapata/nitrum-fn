@@ -10,22 +10,20 @@ import {NitrumOracle} from "../src/NitrumOracle.sol";
 /// Env:
 ///   PRIVATE_KEY
 ///   ORACLE_ADDRESS
-///   PCR0         48-byte hex → pcr0Hash = keccak256(PCR0)
-///   WASM_PATH    path to oracle.wasm → contentHash = sha256(file)
-///   # or pass hashes directly:
-///   PCR0_HASH / CONTENT_HASH  (0x-prefixed bytes32)
+///   PCR0          48-byte hex → pcr0Hash = keccak256(PCR0)
+///   CONTENT_HASH  0x-prefixed bytes32 (sha256 of oracle.wasm)
+///                 from `nitrum-fn describe ./oracle.wasm` (`hash=` line)
+///   # or pass pcr0Hash directly:
+///   PCR0_HASH     0x-prefixed bytes32
 ///
 ///   forge script script/SetEnclave.s.sol:SetEnclave --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast
 contract SetEnclave is Script {
-    string internal constant DEFAULT_WASM_PATH =
-        "../enclave/target/wasm32-unknown-unknown/release/oracle.wasm";
-
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         NitrumOracle oracle = NitrumOracle(vm.envAddress("ORACLE_ADDRESS"));
 
         bytes32 pcr0Hash = _pcr0Hash();
-        bytes32 contentHash_ = _contentHash();
+        bytes32 contentHash_ = vm.envBytes32("CONTENT_HASH");
 
         console2.log("oracle", address(oracle));
         console2.log("pcr0Hash");
@@ -44,13 +42,5 @@ contract SetEnclave is Script {
         bytes memory pcr0 = vm.parseBytes(vm.envString("PCR0"));
         require(pcr0.length == 48, "PCR0 must be 48 bytes");
         return keccak256(pcr0);
-    }
-
-    function _contentHash() internal view returns (bytes32) {
-        if (vm.envExists("CONTENT_HASH")) return vm.envBytes32("CONTENT_HASH");
-        string memory wasmPath = vm.envOr("WASM_PATH", DEFAULT_WASM_PATH);
-        bytes memory wasm = vm.readFileBinary(wasmPath);
-        require(wasm.length > 0, "empty wasm; build enclave or set CONTENT_HASH / WASM_PATH");
-        return sha256(wasm);
     }
 }

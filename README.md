@@ -86,8 +86,10 @@ cargo run -p host
 # 3. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
 # Host returns x-nitrum-fn-hash (sha256 of the .wasm it compiled). Local: no Nitro quote.
+HASH=$(cargo run -p cli --quiet -- describe ./examples/hello-world/.../hello_world.wasm \
+  | awk -F= '/^hash=/{print $2}')
 cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
-  --wasm ./examples/hello-world/.../hello_world.wasm
+  --fn-shasum "$HASH"
 ```
 
 End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -96,18 +98,22 @@ End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIB
 
 The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and echoes `x-nitrum-fn-hash`. That proves the **artifact you uploaded**, not a fresh local rebuild of source.
 
+`nitrum-fn describe` prints that hash from a local `.wasm` (`hash=` / `wasm_bytes=`). Pass it to invoke as `--fn-shasum` (same as `shasum -a 256`).
+
 ```bash
 # Local (Floci): hash header only
-cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --wasm ./path/to/fn.wasm
+HASH=$(cargo run -p cli --quiet -- describe ./path/to/fn.wasm | awk -F= '/^hash=/{print $2}')
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --fn-shasum "$HASH"
 
 # Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe`; host mints NSM user_data = H || sha256(body)
 PCR0="<pcr0 hex from nitrum build>"
 cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["eth"]}' \
-  --wasm ./examples/oracle/enclave/target/wasm32-unknown-unknown/release/oracle.wasm \
-  --pcr0 "$PCR0"
+  --fn-shasum "$HASH" \
+  --pcr0 "$PCR0" \
+  --attestation-out attestation.bin
 ```
 
-On-chain consumer (Foundry + `base/nitro-validator`): see [`examples/oracle/README.md`](examples/oracle/README.md).
+On-chain consumer (Foundry + `base/nitro-validator`): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`examples/oracle/demo.mp4`](examples/oracle/demo.mp4).
 
 **Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 
