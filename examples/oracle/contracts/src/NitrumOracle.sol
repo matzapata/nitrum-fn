@@ -71,7 +71,7 @@ contract NitrumOracle {
 
     /// @notice Pin the trusted Nitro image (PCR0) and guest wasm content hash.
     /// @param pcr0Hash_ `keccak256` of the 48-byte PCR0 from `nitrum build` / eif.json.
-    /// @param contentHash_ `sha256` of the published `.wasm` (matches `x-nitrum-fn-hash` / user_data[0:32]).
+    /// @param contentHash_ `sha256` of the published `.wasm` (matches `x-nitrum-fn-shasum` / user_data[0:32]).
     function setEnclave(bytes32 pcr0Hash_, bytes32 contentHash_) external onlyOwner {
         require(pcr0Hash_ != bytes32(0), "missing pcr0");
         require(contentHash_ != bytes32(0), "missing content hash");

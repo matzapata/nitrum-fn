@@ -17,7 +17,7 @@ struct Cli {
 enum Commands {
     /// Deploy a WASM function
     Deploy(deploy::DeployArgs),
-    /// Print sha256 of a local `.wasm` (same as `x-nitrum-fn-hash` / `--fn-shasum`)
+    /// Print sha256 of a local `.wasm` (same as `x-nitrum-fn-shasum` / `--fn-shasum`)
     Describe(describe::DescribeArgs),
     /// Invoke a deployed function
     Invoke(invoke::InvokeArgs),
@@ -44,7 +44,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use std::path::PathBuf;
 
     #[test]
@@ -124,24 +124,38 @@ mod tests {
     }
 
     #[test]
-    fn invoke_accepts_expect_hash_alias() {
-        let cli = Cli::try_parse_from([
+    fn invoke_rejects_expect_hash_alias() {
+        let err = match Cli::try_parse_from([
             "nitrum-fn",
             "invoke",
             "oracle",
             "--expect-hash",
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
-        ])
-        .expect("parse");
-        match cli.command {
-            Commands::Invoke(args) => {
-                assert_eq!(
-                    args.fn_shasum.as_deref(),
-                    Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
-                );
-            }
-            _ => panic!("expected invoke"),
-        }
+        ]) {
+            Ok(_) => panic!("--expect-hash should not be an alias"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unexpected argument") || msg.contains("--expect-hash"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn invoke_pcr0_defaults_from_env() {
+        let cmd = Cli::command();
+        let invoke = cmd.find_subcommand("invoke").expect("invoke");
+        let pcr0 = invoke
+            .get_arguments()
+            .find(|a| a.get_id() == "pcr0")
+            .expect("pcr0");
+        assert_eq!(
+            pcr0.get_env()
+                .map(|s| s.to_string_lossy().into_owned())
+                .as_deref(),
+            Some("NITRUM_FN_PCR0")
+        );
     }
 
     #[test]

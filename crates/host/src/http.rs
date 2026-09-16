@@ -12,7 +12,7 @@ use tower_http::trace::TraceLayer;
 use crate::error::HttpError;
 use crate::state::AppState;
 
-pub const HASH_HEADER: &str = "x-nitrum-fn-hash";
+pub const SHASUM_HEADER: &str = "x-nitrum-fn-shasum";
 pub const NONCE_HEADER: &str = "x-nitrum-fn-nonce";
 pub const ATTESTATION_HEADER: &str = "x-nitrum-fn-attestation";
 
@@ -93,7 +93,7 @@ async fn invoke(
 
     let hash_hex = response.content_hash.to_hex();
     out_headers.insert(
-        HeaderName::from_static(HASH_HEADER),
+        HeaderName::from_static(SHASUM_HEADER),
         HeaderValue::from_str(&hash_hex)
             .map_err(|e| application::AppError::Invoke(format!("hash header: {e}")))?,
     );

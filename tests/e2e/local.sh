@@ -136,14 +136,14 @@ echo "$desc" | grep -q "^hash=${EXPECTED_HASH}$" \
   || fail "describe hash mismatch (expected ${EXPECTED_HASH}): ${desc}"
 pass "describe (content hash)"
 
-echo "==> invoke after deploy (verify x-nitrum-fn-hash)"
+echo "==> invoke after deploy (verify x-nitrum-fn-shasum)"
 body="$(cargo run -p cli --quiet -- invoke hello-world --url "$HOST_URL" -d '{}' \
   --fn-shasum "$EXPECTED_HASH" 2>"$DATA_DIR/invoke.err")" \
   || { dump_logs; cat "$DATA_DIR/invoke.err" >&2 || true; fail "invoke failed"; }
 
 [[ "$body" == '{"message":"Hello, world!"}' ]] || fail "body: $body"
-grep -q "x-nitrum-fn-hash=${EXPECTED_HASH}" "$DATA_DIR/invoke.err" \
-  || fail "missing/mismatched hash header (expected ${EXPECTED_HASH}): $(cat "$DATA_DIR/invoke.err")"
+grep -q "x-nitrum-fn-shasum=${EXPECTED_HASH}" "$DATA_DIR/invoke.err" \
+  || fail "missing/mismatched shasum header (expected ${EXPECTED_HASH}): $(cat "$DATA_DIR/invoke.err")"
 pass "invoke after deploy (hash verified)"
 
 echo "==> unknown function → 404"

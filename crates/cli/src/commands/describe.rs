@@ -10,7 +10,7 @@ pub struct DescribeArgs {
     pub wasm: PathBuf,
 }
 
-/// Print the content hash of a local `.wasm` (sha256, same as `x-nitrum-fn-hash` / `--fn-shasum`).
+/// Print the content hash of a local `.wasm` (sha256, same as `x-nitrum-fn-shasum` / `--fn-shasum`).
 ///
 /// stdout:
 /// ```text

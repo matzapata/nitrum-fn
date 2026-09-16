@@ -324,11 +324,14 @@ step_tests() {
 
     echo "=== CLI invoke --fn-shasum ==="
     err="$(mktemp)"
-    body="$(cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
-        --fn-shasum "${hash}" 2>"${err}")" \
+    body="$(
+        unset NITRUM_FN_PCR0
+        cli invoke "${NAME}" --url "${INVOKE_URL}" --insecure -d '{}' \
+            --fn-shasum "${hash}" 2>"${err}"
+    )" \
         || { cat "${err}" >&2; die "CLI invoke --fn-shasum failed"; }
     [[ "${body}" == "${EXPECTED_BODY}" ]] || die "CLI --fn-shasum body: ${body}"
-    grep -q 'x-nitrum-fn-hash=' "${err}" || die "missing x-nitrum-fn-hash on stderr: $(cat "${err}")"
+    grep -q 'x-nitrum-fn-shasum=' "${err}" || die "missing x-nitrum-fn-shasum on stderr: $(cat "${err}")"
     if grep -q 'attestation: ok' "${err}"; then
         die "unexpected attestation verify without --pcr0: $(cat "${err}")"
     fi
@@ -341,7 +344,7 @@ step_tests() {
         || { cat "${err}" >&2; die "CLI invoke --pcr0 failed"; }
     [[ "${body}" == "${EXPECTED_BODY}" ]] || die "CLI --pcr0 body: ${body}"
     [[ -s "${att}" ]] || die "empty --attestation-out file"
-    if grep -qE 'x-nitrum-fn-hash=|attestation: ok|document=|written=' "${err}"; then
+    if grep -qE 'x-nitrum-fn-shasum=|attestation: ok|document=|written=' "${err}"; then
         die "expected silent stderr with --attestation-out: $(cat "${err}")"
     fi
     echo "--- NSM attestation written ---" >&2

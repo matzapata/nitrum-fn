@@ -86,7 +86,7 @@ Note the printed `NitrumOracle` address. Optionally set `EXISTING_VALIDATOR` to 
 
 ## 2. Pin the enclave (`setEnclave`)
 
-Hash the guest `.wasm` first (same value as invoke `--fn-shasum` / `x-nitrum-fn-hash`):
+Hash the guest `.wasm` first (same value as invoke `--fn-shasum` / `x-nitrum-fn-shasum`):
 
 ```bash
 WASM=./examples/oracle/enclave/target/wasm32-unknown-unknown/release/oracle.wasm

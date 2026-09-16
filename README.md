@@ -85,7 +85,7 @@ cargo run -p host
 
 # 3. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
-# Host returns x-nitrum-fn-hash (sha256 of the .wasm it compiled). Local: no Nitro quote.
+# Host returns x-nitrum-fn-shasum (sha256 of the .wasm it compiled). Local: no Nitro quote.
 HASH=$(cargo run -p cli --quiet -- describe ./examples/hello-world/.../hello_world.wasm \
   | awk -F= '/^hash=/{print $2}')
 cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
@@ -96,7 +96,7 @@ End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIB
 
 ### Verify which wasm ran
 
-The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and echoes `x-nitrum-fn-hash`. That proves the **artifact you uploaded**, not a fresh local rebuild of source.
+The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and echoes `x-nitrum-fn-shasum`. That proves the **artifact you uploaded**, not a fresh local rebuild of source.
 
 `nitrum-fn describe` prints that hash from a local `.wasm` (`hash=` / `wasm_bytes=`). Pass it to invoke as `--fn-shasum` (same as `shasum -a 256`).
 
@@ -105,11 +105,10 @@ The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and 
 HASH=$(cargo run -p cli --quiet -- describe ./path/to/fn.wasm | awk -F= '/^hash=/{print $2}')
 cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --fn-shasum "$HASH"
 
-# Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe`; host mints NSM user_data = H || sha256(body)
-PCR0="<pcr0 hex from nitrum build>"
+# Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe` (`NITRUM_FN_PCR0` or `--pcr0`); host mints NSM user_data = H || sha256(body)
+export NITRUM_FN_PCR0="<pcr0 hex from nitrum build>"
 cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["eth"]}' \
   --fn-shasum "$HASH" \
-  --pcr0 "$PCR0" \
   --attestation-out attestation.bin
 ```
 

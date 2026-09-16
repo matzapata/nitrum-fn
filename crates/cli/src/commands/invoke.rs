@@ -8,7 +8,7 @@ use clap::Args;
 use domain::ContentHash;
 use nitrum_verify::{verify_attestation, AttestationResult, VerifyOptions};
 
-const HASH_HEADER: &str = "x-nitrum-fn-hash";
+const SHASUM_HEADER: &str = "x-nitrum-fn-shasum";
 const NONCE_HEADER: &str = "x-nitrum-fn-nonce";
 const ATTESTATION_HEADER: &str = "x-nitrum-fn-attestation";
 
@@ -31,11 +31,16 @@ pub struct InvokeArgs {
     /// Accept self-signed TLS (cloud NLB invoke)
     #[arg(long)]
     pub insecure: bool,
-    /// sha256 of the `.wasm` (same as `shasum -a 256`). Compared to `x-nitrum-fn-hash`.
-    #[arg(long = "fn-shasum", alias = "expect-hash", value_name = "HEX")]
+    /// sha256 of the `.wasm` (same as `shasum -a 256`). Compared to `x-nitrum-fn-shasum`.
+    #[arg(long = "fn-shasum", value_name = "HEX")]
     pub fn_shasum: Option<String>,
     /// Pin Nitro PCR0 (hex). Requires attestation; always sends a fresh nonce.
-    #[arg(long = "pcr0", value_name = "HEX", requires = "fn_shasum")]
+    #[arg(
+        long = "pcr0",
+        env = "NITRUM_FN_PCR0",
+        value_name = "HEX",
+        requires = "fn_shasum"
+    )]
     pub pcr0: Option<String>,
     /// Write the verified NSM attestation document (raw COSE Sign1 bytes). Requires `--pcr0`.
     #[arg(
@@ -103,14 +108,14 @@ pub async fn run(args: InvokeArgs) -> Result<()> {
     }
 
     let reported_hash = headers
-        .get(HASH_HEADER)
+        .get(SHASUM_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     if !quiet {
         if let Some(ref h) = reported_hash {
-            eprintln!("x-nitrum-fn-hash={h}");
+            eprintln!("{SHASUM_HEADER}={h}");
         } else {
-            eprintln!("warning: missing {HASH_HEADER} on invoke response");
+            eprintln!("warning: missing {SHASUM_HEADER} on invoke response");
         }
     }
 
@@ -118,7 +123,7 @@ pub async fn run(args: InvokeArgs) -> Result<()> {
         match reported_hash.as_deref() {
             Some(got) if got.eq_ignore_ascii_case(expected) => {}
             Some(got) => bail!("hash mismatch: expected {expected}, got {got}"),
-            None => bail!("missing {HASH_HEADER}; cannot verify --fn-shasum"),
+            None => bail!("missing {SHASUM_HEADER}; cannot verify --fn-shasum"),
         }
     }
 
