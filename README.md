@@ -125,7 +125,7 @@ cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["et
   --attestation-out attestation.bin
 ```
 
-On-chain consumer (Foundry + `base/nitro-validator`): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`docs/assets/oracle-demo.mp4`](docs/assets/oracle-demo.mp4).
+On-chain consumer (Foundry + [`base/nitro-validator`](https://github.com/base/nitro-validator)): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`docs/assets/oracle-demo.mp4`](docs/assets/oracle-demo.mp4).
 
 **Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 

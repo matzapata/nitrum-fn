@@ -292,7 +292,7 @@ That proves the **artifact you uploaded**, not a fresh local rebuild of source.
 
 ## On-chain verification
 
-Trust is not a Nitrum public key. A Solidity consumer checks AWS Nitro PKI, then policy:
+Trust is not a Nitrum public key. A Solidity consumer checks AWS Nitro PKI ([`base/nitro-validator`](https://github.com/base/nitro-validator)), then policy:
 
 | Pin | What | How you get it |
 | --- | --- | --- |
@@ -375,7 +375,7 @@ cargo run -p cli -- invoke oracle \
 
 `NitrumOracle.updatePrice(tbs, signature, hints, body)`:
 
-1. `NitroValidator` — COSE + AWS Nitro root (via `CertManager`).
+1. [`NitroValidator`](https://github.com/base/nitro-validator) — COSE + AWS Nitro root (via `CertManager`).
 2. Policy — PCR0, freshness (`maxAge`, monotonic timestamp), content hash, body hash.
 3. `CanonicalPriceJson` — parse/encode round-trip, then store prices.
 

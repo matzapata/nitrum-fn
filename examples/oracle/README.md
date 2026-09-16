@@ -16,7 +16,7 @@ examples/oracle/
 
 Trust is **not** a Nitrum public key. It is:
 
-1. **AWS Nitro PKI** — `CertManager` / `NitroValidator` check the COSE document is signed under the pinned AWS Nitro root CA
+1. **AWS Nitro PKI** — `CertManager` / [`NitroValidator`](https://github.com/base/nitro-validator) check the COSE document is signed under the pinned AWS Nitro root CA
 2. **PCR0** — Nitro EIF / enclave image measurement (`pcr0Hash = keccak256(raw PCR0)`)
 3. **content hash** — guest `.wasm` content hash (`sha256(wasm)` = `user_data[0:32]`). **Not** AWS PCR1 — that is a different measurement.
 4. **body hash** — `user_data[32..64] == sha256(body)` so posted prices match the attestation
