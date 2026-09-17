@@ -1,6 +1,8 @@
 use crate::error::AppError;
 use crate::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishLock};
-use domain::{ContentHash, PublishRequest, PublishResponse, VersionLabel, MAX_WASM_BYTES};
+use domain::{
+    ContentHash, PublishRequest, PublishResponse, PublishStatus, VersionLabel, MAX_WASM_BYTES,
+};
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -89,7 +91,11 @@ impl PublishFunction {
             content_hash: stored,
             wasm_bytes: req.wasm.len(),
             egress_allow: req.egress_allow,
-            status: if applied { "ready" } else { "superseded" },
+            status: if applied {
+                PublishStatus::Ready
+            } else {
+                PublishStatus::Superseded
+            },
         })
     }
 }
@@ -448,7 +454,7 @@ mod tests {
             })
             .await
             .expect("publish");
-        assert_eq!(res.status, "ready");
+        assert_eq!(res.status, PublishStatus::Ready);
         assert_eq!(
             catalog.hash.lock().unwrap().as_ref(),
             Some(&ContentHash::from_bytes(&wasm))
@@ -470,7 +476,7 @@ mod tests {
             })
             .await
             .expect("publish");
-        assert_eq!(res.status, "superseded");
+        assert_eq!(res.status, PublishStatus::Superseded);
         assert!(catalog.hash.lock().unwrap().is_none());
         assert_eq!(*lock.releases.lock().unwrap(), 1);
     }
@@ -581,6 +587,6 @@ mod tests {
 
         lock.allow_release.notify_one();
         let ra = a.await.expect("join").expect("first publish");
-        assert_eq!(ra.status, "ready");
+        assert_eq!(ra.status, PublishStatus::Ready);
     }
 }

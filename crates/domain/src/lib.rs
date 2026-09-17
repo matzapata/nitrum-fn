@@ -16,4 +16,4 @@ pub use limits::{
     MAX_GUEST_OUTPUT_BYTES, MAX_HTTP_BODY_BYTES, MAX_HTTP_URL_BYTES, MAX_INVOKE_BODY_BYTES,
     MAX_WASM_BYTES,
 };
-pub use publish::{PublishRequest, PublishResponse};
+pub use publish::{PublishRequest, PublishResponse, PublishStatus};
