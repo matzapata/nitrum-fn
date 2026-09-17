@@ -12,9 +12,6 @@ pub const MAX_GUEST_OUTPUT_BYTES: usize = 1024 * 1024;
 /// Max guest linear memory (Wasmtime `StoreLimits`).
 pub const MAX_GUEST_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 
-/// Max AOT `.cwasm` artifact size (8× wasm).
-pub const MAX_COMPILED_BYTES: usize = 8 * MAX_WASM_BYTES;
-
 /// Wall-clock guest invoke deadline.
 pub const INVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 

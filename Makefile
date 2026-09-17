@@ -1,5 +1,5 @@
 .PHONY: lint format fmt-check check audit test adapters e2e e2e-cloud ci \
-	stack stack-down images api publish-worker host oracle-contracts
+	stack stack-down images api host oracle-contracts
 
 # Override the registry/tag per target, e.g.:
 #   make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=sha-1234
@@ -7,7 +7,6 @@
 IMAGE_PREFIX ?= ghcr.io/matzapata/nitrum-fn
 TAG ?= dev
 API_IMAGE ?= $(IMAGE_PREFIX)/api:$(TAG)
-WORKER_IMAGE ?= $(IMAGE_PREFIX)/publish-worker:$(TAG)
 HOST_IMAGE ?= $(IMAGE_PREFIX)/host:$(TAG)
 
 lint:
@@ -53,13 +52,10 @@ stack:
 stack-down:
 	docker compose down --remove-orphans
 
-images: api publish-worker host
+images: api host
 
 api:
 	docker buildx build --platform linux/amd64 -f Dockerfile.api -t $(API_IMAGE) .
-
-publish-worker:
-	docker buildx build --platform linux/amd64 -f Dockerfile.publish-worker -t $(WORKER_IMAGE) .
 
 host:
 	docker buildx build --platform linux/amd64 -f Dockerfile -t $(HOST_IMAGE) .

@@ -23,9 +23,10 @@ impl IntoResponse for HttpError {
         let status = match &self.0 {
             AppError::NotFound(_) | AppError::ArtifactMissing(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
-            AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            AppError::Domain(_)
+            | AppError::HashMismatch { .. }
+            | AppError::BadRequest(_)
+            | AppError::Compile(_) => StatusCode::BAD_REQUEST,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             AppError::Invoke(_)

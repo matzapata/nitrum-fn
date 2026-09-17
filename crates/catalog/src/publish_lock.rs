@@ -10,7 +10,7 @@ const ATTR_HASH: &str = "content_hash";
 const ATTR_QUEUED_AT: &str = "queued_at_ms";
 const ATTR_EXPIRES_AT: &str = "expires_at";
 
-/// Safety TTL so a dead worker cannot block publishes forever (~15 min).
+/// Safety TTL so a crashed publish cannot block the name forever (~15 min).
 pub(crate) const TTL_SECS: u64 = 15 * 60;
 
 /// DynamoDB items: `fn_id` → content hash + queued_at + expires_at (TTL).

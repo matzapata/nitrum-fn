@@ -99,13 +99,12 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
- "aws-sdk-sns",
  "aws-smithy-http-client",
  "axum",
  "catalog",
  "config",
  "domain",
- "messaging",
+ "executor",
  "serde",
  "serde_json",
  "telemetry",
@@ -350,59 +349,6 @@ dependencies = [
  "sha2 0.11.0",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "aws-sdk-sns"
-version = "1.110.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24a258ad67746ba5c18d4816c47d7908ee403b19d8d7a06fc6f633d927d54841"
-dependencies = [
- "arc-swap",
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-observability",
- "aws-smithy-query",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-schema",
- "aws-smithy-types",
- "aws-smithy-xml",
- "aws-types",
- "fastrand",
- "http 0.2.12",
- "http 1.5.0",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
-name = "aws-sdk-sqs"
-version = "1.108.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c9b871e292a3b5255b65f80b2708431732e9d05e155594db9751a2f9e61a6e"
-dependencies = [
- "arc-swap",
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-schema",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "http 1.5.0",
- "regex-lite",
- "tracing",
 ]
 
 [[package]]
@@ -1546,6 +1492,7 @@ dependencies = [
  "tokio",
  "tracing",
  "ureq",
+ "wasmparser 0.255.0",
  "wasmtime",
  "wat",
 ]
@@ -1841,6 +1788,8 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2332,20 +2281,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "messaging"
-version = "0.1.0"
-dependencies = [
- "application",
- "async-trait",
- "aws-sdk-sns",
- "aws-sdk-sqs",
- "domain",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2742,29 +2677,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "publish-worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "application",
- "artifacts",
- "aws-config",
- "aws-sdk-dynamodb",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "aws-smithy-http-client",
- "catalog",
- "config",
- "domain",
- "executor",
- "messaging",
- "serde",
- "telemetry",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -4212,8 +4124,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8e329ef4b5d46e73b91d3ac6924417cad55a8cbbf869c199283383427c3320b"
 dependencies = [
  "bitflags",
+ "hashbrown 0.17.1",
  "indexmap 2.14.0",
  "semver",
+ "serde",
 ]
 
 [[package]]

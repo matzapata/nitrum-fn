@@ -64,53 +64,6 @@ jobs:
           fi
           gh api --method PUT "${base}/${name}%2Fapi/visibility" -f visibility=public
 
-  publisher:
-    name: Publish publisher
-    needs: [ci]
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      WORKER_IMAGE: ghcr.io/${{ github.repository }}/publish-worker
-    steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push publish-worker
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.publish-worker
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.WORKER_IMAGE }}:latest
-            ${{ env.WORKER_IMAGE }}:${{ github.ref_name }}
-            ${{ env.WORKER_IMAGE }}:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ github.ref_name }}
-          cache-from: type=gha,scope=publish-worker
-          cache-to: type=gha,mode=max,scope=publish-worker
-      - name: Make publish-worker package public
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          owner="${{ github.repository_owner }}"
-          name="${{ github.event.repository.name }}"
-          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
-            base="/orgs/${owner}/packages/container"
-          else
-            base="/user/packages/container"
-          fi
-          gh api --method PUT "${base}/${name}%2Fpublish-worker/visibility" -f visibility=public
-
   host:
     name: Publish host (image + EIF)
     needs: [ci]
@@ -180,10 +133,9 @@ jobs:
           ## Images
 
           - \`ghcr.io/${{ github.repository }}/api:${{ github.ref_name }}\`
-          - \`ghcr.io/${{ github.repository }}/publish-worker:${{ github.ref_name }}\`
           - \`ghcr.io/${{ github.repository }}/host:${{ github.ref_name }}\`
 
-          Pin \`api_image\` / \`worker_image\` in \`terraform.tfvars\` to the tag (not \`:latest\`). Packages must be **public** so ECS can pull without a PAT.
+          Pin \`api_image\` in \`terraform.tfvars\` to the tag (not \`:latest\`). Packages must be **public** so ECS can pull without a PAT.
 
           ## Host
 
@@ -194,7 +146,6 @@ jobs:
           eif_version_label = "${label}"
           eif_image_sha384  = "${pcr0}"
           api_image         = "ghcr.io/${{ github.repository }}/api:${{ github.ref_name }}"
-          worker_image      = "ghcr.io/${{ github.repository }}/publish-worker:${{ github.ref_name }}"
           \`\`\`
 
           Rebuild locally with \`nitrum build\` only if you intend a new PCR0.
@@ -274,7 +225,7 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [api, publisher, host, cli]
+    needs: [api, host, cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

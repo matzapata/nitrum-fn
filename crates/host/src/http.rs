@@ -120,11 +120,11 @@ fn parse_nonce(headers: &HeaderMap) -> Result<Option<Vec<u8>>, HttpError> {
     let Some(raw) = headers.get(NONCE_HEADER).and_then(|v| v.to_str().ok()) else {
         return Ok(None);
     };
-    let bytes = BASE64
-        .decode(raw.trim())
-        .map_err(|_| application::AppError::Compile("invalid x-nitrum-fn-nonce (base64)".into()))?;
+    let bytes = BASE64.decode(raw.trim()).map_err(|_| {
+        application::AppError::BadRequest("invalid x-nitrum-fn-nonce (base64)".into())
+    })?;
     if !(16..=32).contains(&bytes.len()) {
-        return Err(application::AppError::Compile(format!(
+        return Err(application::AppError::BadRequest(format!(
             "x-nitrum-fn-nonce must decode to 16..=32 bytes, got {}",
             bytes.len()
         ))
@@ -153,5 +153,29 @@ mod tests {
         let ud = invoke_user_data(&hash, body);
         assert_eq!(&ud[..32], hash.as_bytes());
         assert_eq!(&ud[32..], ContentHash::from_bytes(body).as_bytes());
+    }
+
+    #[test]
+    fn rejects_invalid_nonce_base64() {
+        let mut headers = HeaderMap::new();
+        headers.insert(NONCE_HEADER, "%%%".parse().unwrap());
+        let err = parse_nonce(&headers).expect_err("base64");
+        assert!(
+            matches!(err.0, application::AppError::BadRequest(_)),
+            "{:?}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn rejects_short_nonce() {
+        let mut headers = HeaderMap::new();
+        headers.insert(NONCE_HEADER, BASE64.encode([0u8; 8]).parse().unwrap());
+        let err = parse_nonce(&headers).expect_err("length");
+        assert!(
+            matches!(err.0, application::AppError::BadRequest(_)),
+            "{:?}",
+            err.0
+        );
     }
 }

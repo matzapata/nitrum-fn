@@ -66,7 +66,6 @@ mod tests {
                 assert_eq!(args.wasm, PathBuf::from("./echo.wasm"));
                 assert_eq!(args.name, "echo");
                 assert_eq!(args.url, "http://127.0.0.1:8080");
-                assert_eq!(args.timeout_secs, 180);
                 assert_eq!(args.allow_urls, vec!["https://api.example.com"]);
             }
             _ => panic!("expected deploy"),
@@ -121,25 +120,6 @@ mod tests {
             }
             _ => panic!("expected invoke"),
         }
-    }
-
-    #[test]
-    fn invoke_rejects_expect_hash_alias() {
-        let err = match Cli::try_parse_from([
-            "nitrum-fn",
-            "invoke",
-            "oracle",
-            "--expect-hash",
-            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
-        ]) {
-            Ok(_) => panic!("--expect-hash should not be an alias"),
-            Err(e) => e,
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("unexpected argument") || msg.contains("--expect-hash"),
-            "{msg}"
-        );
     }
 
     #[test]

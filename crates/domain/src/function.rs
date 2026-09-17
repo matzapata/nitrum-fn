@@ -284,4 +284,16 @@ mod egress_origin_tests {
         let out = normalize_egress_allow([a.clone(), a, b]).unwrap();
         assert_eq!(out.len(), 2);
     }
+
+    #[test]
+    fn normalize_rejects_over_cap() {
+        let origins: Vec<_> = (0..=MAX_EGRESS_ALLOW)
+            .map(|i| EgressOrigin::parse(&format!("https://h{i}.example.com")).unwrap())
+            .collect();
+        assert_eq!(origins.len(), MAX_EGRESS_ALLOW + 1);
+        assert!(matches!(
+            normalize_egress_allow(origins),
+            Err(DomainError::TooManyEgressOrigins { max }) if max == MAX_EGRESS_ALLOW
+        ));
+    }
 }

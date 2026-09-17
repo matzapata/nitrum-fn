@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -15,9 +15,6 @@ pub struct DeployArgs {
     pub name: String,
     #[arg(long, env = "NITRUM_FN_URL", default_value = "http://127.0.0.1:8080")]
     pub url: String,
-    /// How long to wait for the compile worker to upsert the catalog
-    #[arg(long, env = "NITRUM_FN_DEPLOY_TIMEOUT_SECS", default_value_t = 180)]
-    pub timeout_secs: u64,
     /// HTTPS origin the function may fetch (repeatable)
     #[arg(long = "allow-url", value_name = "URL")]
     pub allow_urls: Vec<String>,
@@ -38,13 +35,7 @@ struct PublishBody {
     version: String,
     hash: String,
     wasm_bytes: usize,
-    #[allow(dead_code)]
     status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct FunctionBody {
-    hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,16 +85,15 @@ pub async fn run(args: DeployArgs) -> Result<()> {
 
     let body: PublishBody = serde_json::from_slice(&bytes).context("decode response")?;
     tracing::debug!(
-        status = %status,
+        status = %body.status,
         hash = %body.hash,
         version = %body.version,
-        "deploy accepted"
+        "deployed"
     );
-    wait_until_ready(&client, &endpoint, &body.hash, args.timeout_secs).await?;
 
     println!(
-        "deployed {}@{} hash={} wasm_bytes={} status=ready",
-        body.name, body.version, body.hash, body.wasm_bytes
+        "deployed {}@{} hash={} wasm_bytes={} status={}",
+        body.name, body.version, body.hash, body.wasm_bytes, body.status
     );
     Ok(())
 }
@@ -125,61 +115,6 @@ fn collect_allow_urls(args: &DeployArgs) -> Result<Vec<EgressOrigin>> {
     normalize_egress_allow(origins).context("egress allowlist")
 }
 
-#[tracing::instrument(level = "debug", skip(client), err)]
-async fn wait_until_ready(
-    client: &reqwest::Client,
-    endpoint: &str,
-    expected_hash: &str,
-    timeout_secs: u64,
-) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let mut delay = Duration::from_millis(200);
-
-    loop {
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out after {timeout_secs}s waiting for function ready (hash={expected_hash})"
-            );
-        }
-
-        let response = client
-            .get(endpoint)
-            .send()
-            .await
-            .with_context(|| format!("GET {endpoint}"))?;
-
-        if response.status().as_u16() == 404 {
-            tracing::debug!(retry_in = ?delay, "function not in catalog yet");
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(Duration::from_secs(2));
-            continue;
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let bytes = response.bytes().await.unwrap_or_default();
-            let msg = serde_json::from_slice::<ErrorBody>(&bytes)
-                .map(|b| b.error)
-                .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
-            anyhow::bail!("poll failed ({status}): {msg}");
-        }
-
-        let meta: FunctionBody = response.json().await.context("decode function metadata")?;
-        if meta.hash == expected_hash {
-            return Ok(());
-        }
-
-        tracing::debug!(
-            current = %meta.hash,
-            expected = %expected_hash,
-            retry_in = ?delay,
-            "waiting for new hash"
-        );
-        tokio::time::sleep(delay).await;
-        delay = (delay * 2).min(Duration::from_secs(2));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,7 +130,6 @@ mod tests {
             wasm: PathBuf::from("./f.wasm"),
             name: "oracle".into(),
             url: "http://127.0.0.1:8080".into(),
-            timeout_secs: 180,
             allow_urls: vec!["https://example.com".into()],
             config: Some(path),
         };

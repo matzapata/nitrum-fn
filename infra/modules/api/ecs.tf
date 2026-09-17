@@ -29,7 +29,6 @@ resource "aws_ecs_task_definition" "api" {
       ]
       environment = [
         { name = "NITRUM_FN_ENV", value = var.run_env },
-        { name = "NITRUM_FN_PUBLISH__TOPIC_ARN", value = var.publish_topic_arn },
         { name = "AWS_REGION", value = data.aws_region.current.name },
         { name = "OTEL_SERVICE_NAME", value = "nitrum-fn-api" },
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" },

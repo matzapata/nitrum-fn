@@ -23,9 +23,10 @@ impl IntoResponse for HttpError {
         let status = match &self.0 {
             AppError::NotFound(_) | AppError::ArtifactMissing(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
-            AppError::Domain(_) | AppError::HashMismatch { .. } | AppError::Compile(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            AppError::Domain(_)
+            | AppError::HashMismatch { .. }
+            | AppError::BadRequest(_)
+            | AppError::Compile(_) => StatusCode::BAD_REQUEST,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             AppError::Invoke(_)
@@ -47,6 +48,14 @@ impl IntoResponse for HttpError {
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn bad_request_maps_to_400() {
+        let res = HttpError(AppError::BadRequest("invalid nonce".into())).into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(res.into_body(), 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("invalid nonce"));
+    }
 
     #[tokio::test]
     async fn timeout_maps_to_504() {

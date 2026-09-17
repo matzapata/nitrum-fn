@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end: Floci (S3+SNS+SQS+DynamoDB) → api + host + publish-worker → CLI deploy → invoke.
+# End-to-end: Floci (S3+DynamoDB) → api + host → CLI deploy → invoke.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -10,10 +10,8 @@ HOST_PORT="${NITRUM_FN_E2E_HOST_PORT:-18091}"
 DATA_DIR="${NITRUM_FN_E2E_DATA:-$ROOT/.data/e2e}"
 API_LOG="$DATA_DIR/api.log"
 HOST_LOG="$DATA_DIR/host.log"
-WORKER_LOG="$DATA_DIR/worker.log"
 API_PID=""
 HOST_PID=""
-WORKER_PID=""
 COMPOSE_UP=0
 API_URL="http://127.0.0.1:${API_PORT}"
 HOST_URL="http://127.0.0.1:${HOST_PORT}"
@@ -22,7 +20,7 @@ TARGET="wasm32-unknown-unknown"
 WASM_SRC="$EXAMPLE/target/$TARGET/release/hello_world.wasm"
 
 cleanup() {
-  for pid in "${API_PID}" "${HOST_PID}" "${WORKER_PID}"; do
+  for pid in "${API_PID}" "${HOST_PID}"; do
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
       wait "${pid}" 2>/dev/null || true
@@ -40,7 +38,6 @@ fail() { printf 'FAIL - %s\n' "$*" >&2; exit 1; }
 dump_logs() {
   cat "$API_LOG" >&2 || true
   cat "$HOST_LOG" >&2 || true
-  cat "$WORKER_LOG" >&2 || true
 }
 
 wait_healthz() {
@@ -85,10 +82,6 @@ fi
 pass "store ready"
 common_env
 
-echo "==> start publish-worker (SQS → AOT)"
-cargo run -p publish-worker >"$WORKER_LOG" 2>&1 &
-WORKER_PID=$!
-
 echo "==> start api on :${API_PORT} (publish + catalog)"
 NITRUM_FN_SERVER__PORT="$API_PORT" \
   cargo run -p api >"$API_LOG" 2>&1 &
@@ -105,19 +98,13 @@ pass "api healthy"
 wait_healthz "$HOST_URL" "$HOST_PID" "$HOST_LOG" "host"
 pass "host healthy"
 
-if ! kill -0 "${WORKER_PID}" 2>/dev/null; then
-  cat "$WORKER_LOG" >&2 || true
-  fail "publish-worker exited early"
-fi
-pass "publish-worker running"
-
 echo "==> build hello-world wasm"
 rustup target add "$TARGET" >/dev/null
 cargo build --manifest-path "$EXAMPLE/Cargo.toml" --target "$TARGET" --release
 [[ -f "$WASM_SRC" ]] || fail "wasm missing at $WASM_SRC"
 pass "wasm built"
 
-echo "==> CLI deploy (queues AOT; polls until ready)"
+echo "==> CLI deploy (validate + store + catalog upsert)"
 cargo run -p cli --quiet -- deploy "$WASM_SRC" --name hello-world --url "$API_URL" \
   || { dump_logs; fail "deploy failed"; }
 pass "deployed hello-world"
@@ -155,4 +142,4 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
 pass "missing function 404"
 
 echo
-echo "e2e passed (Floci S3+SNS+SQS+DynamoDB)"
+echo "e2e passed (Floci S3+DynamoDB)"

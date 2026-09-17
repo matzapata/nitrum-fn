@@ -12,8 +12,8 @@ pub use function::{
 };
 pub use invoke::{InvokeRequest, InvokeResponse};
 pub use limits::{
-    EPOCH_TICK, HTTP_TIMEOUT, INVOKE_TIMEOUT, MAX_COMPILED_BYTES, MAX_EGRESS_ALLOW,
-    MAX_GUEST_MEMORY_BYTES, MAX_GUEST_OUTPUT_BYTES, MAX_HTTP_BODY_BYTES, MAX_HTTP_URL_BYTES,
-    MAX_INVOKE_BODY_BYTES, MAX_WASM_BYTES,
+    EPOCH_TICK, HTTP_TIMEOUT, INVOKE_TIMEOUT, MAX_EGRESS_ALLOW, MAX_GUEST_MEMORY_BYTES,
+    MAX_GUEST_OUTPUT_BYTES, MAX_HTTP_BODY_BYTES, MAX_HTTP_URL_BYTES, MAX_INVOKE_BODY_BYTES,
+    MAX_WASM_BYTES,
 };
-pub use publish::{PublishQueuedEvent, PublishRequest, PublishResponse};
+pub use publish::{PublishRequest, PublishResponse};

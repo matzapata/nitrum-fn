@@ -30,7 +30,7 @@ variable "private_subnet_ids" {
 
 variable "artifacts_bucket_name" {
   type        = string
-  description = "S3 bucket for .wasm / .cwasm artifacts."
+  description = "S3 bucket for .wasm artifacts."
 }
 
 variable "artifacts_bucket_arn" {
@@ -56,11 +56,6 @@ variable "publish_lock_table_name" {
 variable "publish_lock_table_arn" {
   type        = string
   description = "ARN of the publish lock table."
-}
-
-variable "publish_topic_arn" {
-  type        = string
-  description = "SNS topic ARN for publish-queued events."
 }
 
 variable "image" {

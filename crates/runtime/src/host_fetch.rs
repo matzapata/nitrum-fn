@@ -44,11 +44,6 @@ pub fn fetch_get(url: &str) -> Result<Response, Error> {
     }
 }
 
-/// Back-compat alias for [`fetch_get`].
-pub fn get(url: &str) -> Result<Response, Error> {
-    fetch_get(url)
-}
-
 #[cfg(target_arch = "wasm32")]
 fn wasm_get(url: &str) -> Result<Response, Error> {
     let url_bytes = url.as_bytes();

@@ -10,6 +10,7 @@ use domain::{
     MAX_GUEST_OUTPUT_BYTES, MAX_HTTP_URL_BYTES, MAX_INVOKE_BODY_BYTES,
 };
 use tracing::instrument;
+use wasmparser::{CompositeInnerType, ExternalKind, Parser, Payload, TypeRef, ValType};
 use wasmtime::{
     Caller, Engine, ExternType, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder,
     Trap,
@@ -22,7 +23,8 @@ use crate::http_host::{
 /// Runs guest modules under the v0 `invoke(ptr, len) -> len` ABI.
 ///
 /// Invoke compiles from verified `.wasm` bytes and caches `Module` by content hash.
-/// Publish still uses `compile` for optional AOT `.cwasm` artifacts.
+/// Publish calls [`Self::validate`] which does structural validation + ABI shape
+/// checks only — it never invokes the Cranelift compiler backend.
 pub struct WasmtimeRunner {
     engine: Engine,
     invoke_timeout: Duration,
@@ -132,21 +134,9 @@ impl WasmtimeRunner {
         store
     }
 
-    fn compile_sync(engine: &Engine, wasm: &[u8]) -> Result<Vec<u8>, AppError> {
-        let module = Module::new(engine, wasm).map_err(|e| AppError::Compile(e.to_string()))?;
-        assert_abi(&module)?;
-        module
-            .serialize()
-            .map_err(|e| AppError::Compile(e.to_string()))
-    }
-
-    fn deserialize(engine: &Engine, compiled: &[u8]) -> Result<Module, AppError> {
-        // SAFETY: `compiled` was produced by `Module::serialize` after a validating
-        // `Module::new` in this host (same Engine config).
-        unsafe {
-            Module::deserialize(engine, compiled)
-                .map_err(|e| AppError::Invoke(format!("deserialize compiled module: {e}")))
-        }
+    fn validate_sync(engine: &Engine, wasm: &[u8]) -> Result<(), AppError> {
+        Module::validate(engine, wasm).map_err(|e| AppError::Compile(e.to_string()))?;
+        assert_abi_bytes(wasm)
     }
 
     fn instantiate(
@@ -421,52 +411,156 @@ fn assert_abi(module: &Module) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Publish-path ABI check: walk sections with `wasmparser` (no Cranelift).
+fn assert_abi_bytes(wasm: &[u8]) -> Result<(), AppError> {
+    let mut types: Vec<Option<wasmparser::FuncType>> = Vec::new();
+    let mut func_type_indices: Vec<u32> = Vec::new();
+    let mut exports: Vec<(String, ExternalKind, u32)> = Vec::new();
+    let mut imports: Vec<(String, String, TypeRef)> = Vec::new();
+
+    for payload in Parser::new(0).parse_all(wasm) {
+        let payload = payload.map_err(|e| AppError::Compile(e.to_string()))?;
+        match payload {
+            Payload::TypeSection(reader) => {
+                for group in reader {
+                    let group = group.map_err(|e| AppError::Compile(e.to_string()))?;
+                    for ty in group.into_types() {
+                        let func = match ty.composite_type.inner {
+                            CompositeInnerType::Func(f) => Some(f),
+                            _ => None,
+                        };
+                        types.push(func);
+                    }
+                }
+            }
+            Payload::ImportSection(reader) => {
+                for import in reader.into_imports() {
+                    let import = import.map_err(|e| AppError::Compile(e.to_string()))?;
+                    if matches!(import.ty, TypeRef::Func(_) | TypeRef::FuncExact(_)) {
+                        let type_idx = match import.ty {
+                            TypeRef::Func(i) | TypeRef::FuncExact(i) => i,
+                            _ => unreachable!(),
+                        };
+                        func_type_indices.push(type_idx);
+                    }
+                    imports.push((
+                        import.module.to_string(),
+                        import.name.to_string(),
+                        import.ty,
+                    ));
+                }
+            }
+            Payload::FunctionSection(reader) => {
+                for idx in reader {
+                    let idx = idx.map_err(|e| AppError::Compile(e.to_string()))?;
+                    func_type_indices.push(idx);
+                }
+            }
+            Payload::ExportSection(reader) => {
+                for export in reader {
+                    let export = export.map_err(|e| AppError::Compile(e.to_string()))?;
+                    exports.push((export.name.to_string(), export.kind, export.index));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut saw_memory = false;
+    let mut saw_invoke = false;
+    for (name, kind, index) in &exports {
+        match name.as_str() {
+            "memory" => {
+                if *kind != ExternalKind::Memory {
+                    return Err(AppError::Compile(format!(
+                        "export `memory` must be a memory, got {kind:?}"
+                    )));
+                }
+                saw_memory = true;
+            }
+            "invoke" => {
+                if *kind != ExternalKind::Func && *kind != ExternalKind::FuncExact {
+                    return Err(AppError::Compile(format!(
+                        "export `invoke` must be a function, got {kind:?}"
+                    )));
+                }
+                let type_idx = *func_type_indices.get(*index as usize).ok_or_else(|| {
+                    AppError::Compile(format!("export `invoke` references missing func {index}"))
+                })?;
+                let Some(Some(ty)) = types.get(type_idx as usize) else {
+                    return Err(AppError::Compile(format!(
+                        "export `invoke` references missing type {type_idx}"
+                    )));
+                };
+                let ok = ty.params().len() == 2
+                    && ty.params()[0] == ValType::I32
+                    && ty.params()[1] == ValType::I32
+                    && ty.results().len() == 1
+                    && ty.results()[0] == ValType::I32;
+                if !ok {
+                    return Err(AppError::Compile(format!(
+                        "export `invoke` must be (i32, i32) -> i32, got {ty}"
+                    )));
+                }
+                saw_invoke = true;
+            }
+            _ => {}
+        }
+    }
+    if !saw_memory {
+        return Err(AppError::Compile("module missing export `memory`".into()));
+    }
+    if !saw_invoke {
+        return Err(AppError::Compile("module missing export `invoke`".into()));
+    }
+
+    for (module_name, field, ty) in &imports {
+        if module_name == "nitrum" && field == "http_get" {
+            let type_idx = match ty {
+                TypeRef::Func(i) | TypeRef::FuncExact(i) => *i,
+                other => {
+                    return Err(AppError::Compile(format!(
+                        "import `nitrum.http_get` must be a function, got {other:?}"
+                    )));
+                }
+            };
+            let Some(Some(func_ty)) = types.get(type_idx as usize) else {
+                return Err(AppError::Compile(format!(
+                    "import `nitrum.http_get` references missing type {type_idx}"
+                )));
+            };
+            let ok = func_ty.params().len() == 4
+                && func_ty.params().iter().all(|p| *p == ValType::I32)
+                && func_ty.results().len() == 1
+                && func_ty.results()[0] == ValType::I32;
+            if !ok {
+                return Err(AppError::Compile(format!(
+                    "import `nitrum.http_get` must be (i32, i32, i32, i32) -> i32, got {func_ty}"
+                )));
+            }
+        } else {
+            return Err(AppError::Compile(format!(
+                "unsupported import `{module_name}.{field}`"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn join_err(err: tokio::task::JoinError) -> AppError {
     AppError::Invoke(format!("join error: {err}"))
 }
 
 #[async_trait]
 impl FunctionRunner for WasmtimeRunner {
-    #[instrument(skip(self, wasm), fields(hash = %hash, wasm_len = wasm.len()))]
-    async fn compile(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Vec<u8>, AppError> {
-        let _ = hash;
+    #[instrument(skip(self, wasm), fields(wasm_len = wasm.len()))]
+    async fn validate(&self, wasm: &[u8]) -> Result<(), AppError> {
         let engine = self.engine.clone();
         let wasm = wasm.to_vec();
-        tokio::task::spawn_blocking(move || Self::compile_sync(&engine, &wasm))
+        tokio::task::spawn_blocking(move || Self::validate_sync(&engine, &wasm))
             .await
             .map_err(join_err)?
-    }
-
-    #[instrument(skip(self, compiled, input, egress_allow), fields(hash = %hash, input_len = input.len()))]
-    async fn run_precompiled(
-        &self,
-        hash: &ContentHash,
-        compiled: &[u8],
-        input: &[u8],
-        egress_allow: &[EgressOrigin],
-    ) -> Result<RunOutcome, AppError> {
-        let _ = hash;
-        let engine = self.engine.clone();
-        let compiled = compiled.to_vec();
-        let input = input.to_vec();
-        let egress_allow = egress_allow.to_vec();
-        let timeout = self.invoke_timeout;
-        let tick = self.epoch_tick;
-        let http_client = self.http_client.clone();
-        let runner = WasmtimeRunner {
-            engine: engine.clone(),
-            invoke_timeout: timeout,
-            epoch_tick: tick,
-            http_client,
-            modules: Mutex::new(HashMap::new()),
-        };
-        let output = tokio::task::spawn_blocking(move || {
-            let module = Self::deserialize(&engine, &compiled)?;
-            runner.invoke_sync(&module, &input, &egress_allow)
-        })
-        .await
-        .map_err(join_err)??;
-        Ok(RunOutcome { output })
     }
 
     #[instrument(skip(self, wasm, input, egress_allow), fields(hash = %hash, input_len = input.len()))]
@@ -541,6 +635,20 @@ mod tests {
             r#"
             (module
               (memory (export "memory") 1)
+            )
+            "#,
+        )
+        .expect("wat")
+    }
+
+    fn bad_invoke_sig_wasm() -> Vec<u8> {
+        wat::parse_str(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "invoke") (param i32) (result i32)
+                local.get 0
+              )
             )
             "#,
         )
@@ -652,27 +760,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_then_run_precompiled_echoes() {
-        let runner = WasmtimeRunner::new().expect("engine");
-        let wasm = echo_wasm();
-        let hash = ContentHash::from_bytes(&wasm);
-
-        let compiled = runner.compile(&hash, &wasm).await.expect("compile");
-        assert!(!compiled.is_empty());
-
-        let out = runner
-            .run_precompiled(&hash, &compiled, b"hello", NO_EGRESS)
-            .await
-            .expect("run");
-        assert_eq!(out.output, b"hello");
-    }
-
-    #[tokio::test]
-    async fn compile_rejects_module_missing_invoke() {
+    async fn validate_rejects_module_missing_invoke() {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = missing_invoke_wasm();
-        let hash = ContentHash::from_bytes(&wasm);
-        let err = runner.compile(&hash, &wasm).await.expect_err("abi");
+        let err = runner.validate(&wasm).await.expect_err("abi");
         match err {
             AppError::Compile(msg) => assert!(msg.contains("invoke"), "{msg}"),
             other => panic!("expected Compile, got {other}"),
@@ -680,11 +771,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_rejects_unknown_import() {
+    async fn validate_rejects_wrong_invoke_signature() {
+        let runner = WasmtimeRunner::new().expect("engine");
+        let wasm = bad_invoke_sig_wasm();
+        let err = runner.validate(&wasm).await.expect_err("abi");
+        match err {
+            AppError::Compile(msg) => {
+                assert!(msg.contains("invoke"), "{msg}");
+                assert!(msg.contains("(i32, i32) -> i32"), "{msg}");
+            }
+            other => panic!("expected Compile, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_unknown_import() {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = wasi_import_wasm();
-        let hash = ContentHash::from_bytes(&wasm);
-        let err = runner.compile(&hash, &wasm).await.expect_err("abi");
+        let err = runner.validate(&wasm).await.expect_err("abi");
         match err {
             AppError::Compile(msg) => assert!(msg.contains("unsupported import"), "{msg}"),
             other => panic!("expected Compile, got {other}"),
@@ -692,16 +796,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_does_not_hang_on_start_loop() {
+    async fn validate_does_not_hang_on_start_loop() {
         let runner = WasmtimeRunner::new().expect("engine");
         let wasm = start_loop_wasm();
-        let hash = ContentHash::from_bytes(&wasm);
         let started = Instant::now();
-        let compiled = runner.compile(&hash, &wasm).await.expect("compile");
-        assert!(!compiled.is_empty());
+        runner.validate(&wasm).await.expect("validate");
         assert!(
             started.elapsed() < Duration::from_secs(2),
-            "compile must not instantiate (start)"
+            "validate must not instantiate (start)"
         );
     }
 
@@ -744,9 +846,8 @@ mod tests {
                 .expect("engine");
         let wasm = start_loop_wasm();
         let hash = ContentHash::from_bytes(&wasm);
-        let compiled = runner.compile(&hash, &wasm).await.expect("compile");
         let err = runner
-            .run_precompiled(&hash, &compiled, b"x", NO_EGRESS)
+            .run(&hash, &wasm, b"x", NO_EGRESS)
             .await
             .expect_err("timeout");
         assert!(matches!(err, AppError::Timeout(_)), "{err}");

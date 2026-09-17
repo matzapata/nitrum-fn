@@ -31,7 +31,6 @@ impl InvokeFunction {
         let hash = version.content_hash.clone();
 
         // Trusted path: load `.wasm`, re-hash in the store, Cranelift in the host.
-        // Do not deserialize unsigned `.cwasm` from the publish worker.
         let wasm = self.artifacts.get(&hash).await?;
         let outcome = self
             .runner
@@ -135,18 +134,6 @@ mod tests {
             }
             Ok(bytes)
         }
-
-        async fn put_compiled(
-            &self,
-            _hash: &ContentHash,
-            _compiled: &[u8],
-        ) -> Result<(), AppError> {
-            Ok(())
-        }
-
-        async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-            Err(AppError::ArtifactMissing(hash.to_hex()))
-        }
     }
 
     struct Runner {
@@ -172,18 +159,8 @@ mod tests {
 
     #[async_trait]
     impl FunctionRunner for Runner {
-        async fn compile(&self, _hash: &ContentHash, _wasm: &[u8]) -> Result<Vec<u8>, AppError> {
-            Ok(b"compiled".to_vec())
-        }
-
-        async fn run_precompiled(
-            &self,
-            _hash: &ContentHash,
-            _compiled: &[u8],
-            _input: &[u8],
-            _egress_allow: &[domain::EgressOrigin],
-        ) -> Result<RunOutcome, AppError> {
-            Err(AppError::Invoke("precompiled path unused".into()))
+        async fn validate(&self, _wasm: &[u8]) -> Result<(), AppError> {
+            Ok(())
         }
 
         async fn run(

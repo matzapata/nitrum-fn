@@ -189,7 +189,7 @@ Same value as `shasum -a 256` and as response header `x-nitrum-fn-shasum`.
 
 ## Deploy
 
-CLI talks to the **API** (`NITRUM_FN_URL`, default `http://127.0.0.1:8080`). It `PUT`s the wasm, then polls `GET /functions/{name}` until the catalog hash matches (default 180s, `NITRUM_FN_DEPLOY_TIMEOUT_SECS`).
+CLI talks to the **API** (`NITRUM_FN_URL`, default `http://127.0.0.1:8080`). It `PUT`s the wasm; the catalog row is written before the response.
 
 ```bash
 cargo run -p cli -- deploy ./hello_world.wasm --name hello-world
@@ -205,7 +205,7 @@ cargo run -p cli -- deploy ./hello_world.wasm --name hello-world --url "$API_URL
 
 `hello-world` helper: `bash examples/hello-world/deploy-local.sh`.
 
-Ready means the **worker** compiled AOT and upserted the catalog. The host still loads and Cranelift-compiles the verified `.wasm` on invoke (module cache after the first call on that worker).
+Ready means the API validated, stored, and upserted the catalog before responding. The host still loads and Cranelift-compiles that `.wasm` on invoke (module cache after the first call on that host).
 
 ### HTTP (without the CLI)
 
@@ -216,7 +216,7 @@ x-nitrum-fn-allow-url: https://api.example.com
 ```
 
 ```json
-{"name":"echo","version":"latest","hash":"…","wasm_bytes":1234,"status":"queued"}
+{"name":"echo","version":"latest","hash":"…","wasm_bytes":1234,"status":"ready"}
 ```
 
 ```http
@@ -432,7 +432,6 @@ cargo run -p cli -- --help
 | Env | Used by |
 | --- | --- |
 | `NITRUM_FN_URL` | `deploy` API base (default `http://127.0.0.1:8080`) |
-| `NITRUM_FN_DEPLOY_TIMEOUT_SECS` | Poll for catalog ready (default `180`) |
 | `NITRUM_FN_INVOKE_URL` | `invoke` host base (default `http://127.0.0.1:8081`) |
 | `NITRUM_FN_PCR0` | Invoke PCR0 pin |
 
@@ -444,4 +443,4 @@ cargo run -p cli -- --help
 | `examples/oracle/enclave` | Allowlisted CoinGecko GET, canonical body |
 | `examples/oracle/contracts` | Foundry consumer of the attested body |
 
-Local stack (API + worker + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `make e2e` / `./tests/e2e/cloud.sh`.
+Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `make e2e` / `./tests/e2e/cloud.sh`.

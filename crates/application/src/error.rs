@@ -23,6 +23,10 @@ pub enum AppError {
     #[error("artifact hash mismatch: expected {expected}, got {actual}")]
     HashMismatch { expected: String, actual: String },
 
+    /// Request header or other client input failed validation.
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
     /// Compile failed.
     #[error("compile failed: {0}")]
     Compile(String),
@@ -85,6 +89,8 @@ mod tests {
     #[test]
     fn client_errors_keep_their_display() {
         let err = AppError::NotFound("echo@latest".into());
+        assert_eq!(err.public_message(), err.to_string());
+        let err = AppError::BadRequest("invalid x-nitrum-fn-nonce (base64)".into());
         assert_eq!(err.public_message(), err.to_string());
     }
 }

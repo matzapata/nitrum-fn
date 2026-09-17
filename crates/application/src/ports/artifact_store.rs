@@ -8,12 +8,6 @@ pub trait ArtifactStore: Send + Sync {
     /// Store raw `.wasm` bytes and return their sha256 content hash.
     async fn put(&self, wasm: &[u8]) -> Result<ContentHash, AppError>;
 
-    /// Retrieve raw `.wasm` bytes by content hash.
+    /// Retrieve raw `.wasm` bytes by content hash (re-hash and reject mismatch).
     async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError>;
-
-    /// Store a Wasmtime-serialized compiled module, keyed by the source wasm hash.
-    async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError>;
-
-    /// Retrieve a Wasmtime-serialized compiled module by wasm content hash.
-    async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError>;
 }

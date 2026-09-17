@@ -5,8 +5,8 @@ use crate::AppError;
 
 /// Per-function lock for concurrent publish serialization (Lambda-style).
 ///
-/// One live lock per [`FunctionId`]. Held from publish accept until compile
-/// succeeds (or TTL expires). A second acquire while live is [`AppError::Conflict`].
+/// One live lock per [`FunctionId`]. Held until catalog upsert finishes (or TTL
+/// expires). A second acquire while live is [`AppError::Conflict`].
 #[async_trait]
 pub trait PublishLock: Send + Sync {
     /// Reserve `function` for this hash generation. Fails with conflict if a
@@ -19,6 +19,6 @@ pub trait PublishLock: Send + Sync {
     ) -> Result<(), AppError>;
 
     /// Drop the lock only if it still points at `hash`. Wrong-hash deletes are
-    /// ignored so a late worker cannot unlock a newer publish.
+    /// ignored so a late release cannot unlock a newer publish.
     async fn release(&self, function: &FunctionId, hash: &ContentHash) -> Result<(), AppError>;
 }

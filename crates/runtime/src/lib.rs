@@ -32,7 +32,6 @@ mod abi;
 
 pub use block_on::block_on;
 pub use error::Error;
-pub use host_fetch::get;
 pub use http::{
     Client, IntoResponse, PendingRequest, Request, RequestBuilder, Response, ResponseBuilder,
 };

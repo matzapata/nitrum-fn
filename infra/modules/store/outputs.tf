@@ -8,13 +8,8 @@ output "eif_bucket_arn" {
   value       = aws_s3_bucket.eif.arn
 }
 
-output "eif_s3_key" {
-  description = "Object key the control-plane downloads"
-  value       = var.eif_s3_key
-}
-
 output "artifacts_bucket_name" {
-  description = "S3 bucket for function artifacts (artifacts/{hash}.wasm|.cwasm)"
+  description = "S3 bucket for function artifacts (artifacts/{hash}.wasm)"
   value       = aws_s3_bucket.artifacts.bucket
 }
 
@@ -41,26 +36,6 @@ output "publish_lock_table_name" {
 output "publish_lock_table_arn" {
   description = "ARN of the publish lock table"
   value       = aws_dynamodb_table.publish_lock.arn
-}
-
-output "publish_topic_arn" {
-  description = "SNS topic ARN for publish-queued events"
-  value       = aws_sns_topic.publish.arn
-}
-
-output "compile_queue_url" {
-  description = "SQS queue URL for AOT compile workers"
-  value       = aws_sqs_queue.compile.url
-}
-
-output "compile_queue_arn" {
-  description = "SQS queue ARN for AOT compile workers"
-  value       = aws_sqs_queue.compile.arn
-}
-
-output "compile_dlq_arn" {
-  description = "SQS DLQ ARN for failed compile jobs"
-  value       = aws_sqs_queue.compile_dlq.arn
 }
 
 output "metrics_log_group_name" {

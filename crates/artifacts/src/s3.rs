@@ -5,9 +5,9 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use domain::{ContentHash, MAX_COMPILED_BYTES, MAX_WASM_BYTES};
+use domain::{ContentHash, MAX_WASM_BYTES};
 
-/// Stores `artifacts/{sha256}.wasm` and `artifacts/{sha256}.cwasm` in one bucket.
+/// Stores `artifacts/{sha256}.wasm` in one bucket.
 pub struct S3ArtifactStore {
     /// AWS S3 client.
     client: Client,
@@ -90,10 +90,6 @@ impl S3ArtifactStore {
     fn wasm_key(&self, hash: &ContentHash) -> String {
         format!("{}/{}.wasm", self.prefix, hash.to_hex())
     }
-
-    fn cwasm_key(&self, hash: &ContentHash) -> String {
-        format!("{}/{}.cwasm", self.prefix, hash.to_hex())
-    }
 }
 
 #[async_trait]
@@ -116,21 +112,6 @@ impl ArtifactStore for S3ArtifactStore {
             });
         }
         Ok(bytes)
-    }
-
-    async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
-        if compiled.len() > MAX_COMPILED_BYTES {
-            return Err(AppError::PayloadTooLarge(format!(
-                "compiled {} bytes exceeds max {MAX_COMPILED_BYTES}",
-                compiled.len()
-            )));
-        }
-        self.put_object(&self.cwasm_key(hash), compiled).await
-    }
-
-    async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.get_object(&self.cwasm_key(hash), hash, MAX_COMPILED_BYTES)
-            .await
     }
 }
 

@@ -4,12 +4,11 @@ aws_region = "us-east-1"
 project_name = "nitrum-fn"
 retain       = false
 
-# false = network + store + API + worker. Set true after you have an EIF + PCR0.
+# false = network + store + API. Set true after you have an EIF + PCR0.
 enable_enclave = false
 
 # Defaults are GHCR (the Release workflow publishes these on v* tags). Override for Docker Hub or another registry:
-# api_image    = "matzapata/nitrum-fn-api:latest"
-# worker_image = "matzapata/nitrum-fn-publish-worker:latest"
+# api_image = "matzapata/nitrum-fn-api:latest"
 
 # Optional NLB alias (requires hosted_zone_id). Default invoke URL is the NLB DNS name.
 # hosted_zone_id   = "ZXXXXXXXXXXXX"

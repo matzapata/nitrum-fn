@@ -2,17 +2,15 @@ mod config;
 
 use anyhow::{Context, Result};
 use api::ApiState;
-use application::ports::{ArtifactStore, FunctionCatalog, PublishBus};
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
 use application::PublishFunction;
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
-use aws_sdk_sns::config::Builder as SnsConfigBuilder;
-use aws_sdk_sns::Client as SnsClient;
 use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
-use messaging::SnsPublishBus;
+use executor::WasmtimeRunner;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use telemetry::{env, TelemetryConfig};
@@ -34,7 +32,6 @@ async fn main() -> Result<()> {
     let sdk = load_aws_config().await;
     let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
     let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
-    let sns = build_sns_client(&sdk, config.publish.endpoint.as_deref())?;
 
     // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
@@ -50,11 +47,16 @@ async fn main() -> Result<()> {
         ddb,
         config.catalog.publish_lock_table.clone(),
     ));
-    let bus: Arc<dyn PublishBus> =
-        Arc::new(SnsPublishBus::new(sns, config.publish.topic_arn.clone()));
+    let runner: Arc<dyn FunctionRunner> =
+        Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
 
     // Build publish usecase.
-    let publish = Arc::new(PublishFunction::new(artifacts, bus, lock));
+    let publish = Arc::new(PublishFunction::new(
+        artifacts,
+        catalog.clone(),
+        lock,
+        runner,
+    ));
 
     // Build HTTP router.
     let app = api::router(ApiState { publish, catalog });
@@ -68,8 +70,6 @@ async fn main() -> Result<()> {
         artifacts_endpoint = ?config.artifacts.endpoint,
         table = %config.catalog.table,
         catalog_endpoint = ?config.catalog.endpoint,
-        publish_topic_arn = %config.publish.topic_arn,
-        publish_endpoint = ?config.publish.endpoint,
         "nitrum-fn api ready"
     );
 
@@ -100,14 +100,6 @@ fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Resul
         builder = builder.endpoint_url(url).force_path_style(true);
     }
     Ok(S3Client::from_conf(builder.build()))
-}
-
-fn build_sns_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<SnsClient> {
-    let mut builder = SnsConfigBuilder::from(sdk);
-    if let Some(url) = endpoint {
-        builder = builder.endpoint_url(url);
-    }
-    Ok(SnsClient::from_conf(builder.build()))
 }
 
 fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {

@@ -14,7 +14,6 @@ flowchart LR
 
   subgraph nitrumfn [nitrum-fn]
     API[Management API]
-    Worker[Publish worker]
     Host[WASM host]
   end
 
@@ -27,17 +26,13 @@ flowchart LR
   subgraph store [Shared store]
     S3[(S3 artifacts)]
     DDB[(DynamoDB catalog)]
-    SNS[SNS / SQS]
   end
 
   CLI --> API
   Agent --> Host
   Relayer --> Host
   API --> S3
-  API --> SNS
-  Worker --> S3
-  Worker --> DDB
-  SNS --> Worker
+  API --> DDB
   Host --> S3
   Host --> DDB
   Host --> DP
@@ -56,7 +51,7 @@ The split is the product:
 
 | Path              | Who                               | Sees plaintext invoke bodies?        |
 | ----------------- | --------------------------------- | ------------------------------------ |
-| Publish / catalog | API, worker, CLI, later dashboard | No — metadata and `.wasm` bytes only |
+| Publish / catalog | API, CLI, later dashboard         | No — metadata and `.wasm` bytes only |
 | Invoke            | Host inside the enclave           | Yes — after TLS termination          |
 
 
@@ -66,7 +61,6 @@ Rules that follow:
 - TLS private key never leaves the enclave.
 - Any healthy worker can serve any function after TLS. There is no SNI routing, subdomain map, or coordinator.
 - The host re-hashes `.wasm` bytes from S3 before compiling. Catalog rows are a pointer, not a trust root.
-- Unsigned `.cwasm` from the publish worker is **not** deserialized on invoke. AOT exists so publish can declare “ready”; the trusted execute path is still verified wasm → Cranelift in the enclave.
 - Attestation `user_data` binds both the guest image and the HTTP response body: `sha256(wasm) || sha256(body)`.
 
 ```mermaid
@@ -103,7 +97,6 @@ flowchart TB
   subgraph vpc [VPC]
     subgraph fargate [Fargate]
       API[nitrum-fn-api]
-      PW[nitrum-fn-publish-worker]
     end
     subgraph asg [ASG]
       CP[Nitrum control-plane]
@@ -115,8 +108,6 @@ flowchart TB
   subgraph aws [AWS]
     S3[(artifacts + EIF buckets)]
     DDB[(catalog + publish-lock)]
-    SNS[SNS publish topic]
-    SQS[SQS compile queue]
     KMS[KMS PCR0-conditioned]
   end
 
@@ -127,11 +118,6 @@ flowchart TB
   DP --> Host
   API --> S3
   API --> DDB
-  API --> SNS
-  SNS --> SQS
-  SQS --> PW
-  PW --> S3
-  PW --> DDB
   Host --> S3
   Host --> DDB
   Host --> KMS
@@ -145,7 +131,6 @@ flowchart TB
 | ----------------- | ----------------------- | ------------------------------------ |
 | Publish / catalog | Fargate behind an ALB   | HTTP (`api_url`)                     |
 | Invoke            | Nitro ASG behind an NLB | HTTPS, TLS in-enclave (`invoke_url`) |
-| AOT compile       | Fargate worker, musl    | SQS long-poll                        |
 
 
 `project_name` must equal `[project].name` in the root `nitrum.toml` (`nitrum-fn`). Environment is account + DNS overlay (`NITRUM_FN_ENV=staging|prod`), not a second project slug.
@@ -163,7 +148,7 @@ Talks to the API and the host. It never runs wasm.
 
 | Command    | Role                                                               |
 | ---------- | ------------------------------------------------------------------ |
-| `deploy`   | `PUT` the `.wasm`, then poll `GET` until the catalog hash matches  |
+| `deploy`   | `PUT` the `.wasm`         |
 | `describe` | sha256 of a local `.wasm` (same value as `x-nitrum-fn-shasum`)     |
 | `invoke`   | `POST /invoke/{name}`; optional hash pin, PCR0, attestation verify |
 
@@ -175,30 +160,16 @@ Talks to the API and the host. It never runs wasm.
 Fargate composition root. Hexagonal use case: `PublishFunction`.
 
 
-| Method | Path                | Purpose                                       |
-| ------ | ------------------- | --------------------------------------------- |
-| `GET`  | `/healthz`          | Liveness                                      |
-| `PUT`  | `/functions/{name}` | Store wasm, acquire publish lock, enqueue SNS |
-| `GET`  | `/functions/{name}` | Resolve `latest` (hash + egress allowlist)    |
+| Method | Path                | Purpose                                              |
+| ------ | ------------------- | ---------------------------------------------------- |
+| `GET`  | `/healthz`          | Liveness                                             |
+| `PUT`  | `/functions/{name}` | Validate wasm (no Cranelift), store, upsert catalog  |
+| `GET`  | `/functions/{name}` | Resolve `latest` (hash + egress allowlist)           |
 
 
-`PUT` returns `202` with `status: "queued"`. The function is not invokable until the worker upserts the catalog. Concurrent publish of the same name is `409`.
+`PUT` returns `200` with `status: "ready"` once the catalog row is written. Concurrent publish of the same name is `409`.
 
 Allowlist travels as repeated `x-nitrum-fn-allow-url` headers, not in the wasm body.
-
-### Publish worker (`crates/publish-worker`)
-
-Fargate / local consumer. Hexagonal use case: `CompileQueuedFunction`.
-
-1. Long-poll SQS.
-2. Load `{hash}.wasm` from S3 and re-hash.
-3. Wasmtime AOT → `{hash}.cwasm` (musl, so the blob matches the enclave toolchain). Skip if `.cwasm` already exists.
-4. Upsert catalog `name@latest` if `queued_at_ms` is not stale.
-5. Release the per-function publish lock.
-
-A newer generation wins: catalog `PutItem` is conditioned on `queued_at_ms`. A late worker still writes `.cwasm` and drops **its** lock, but does not clobber a newer catalog row.
-
-After rolling a new **worker** image, republish functions so `.cwasm` is rebuilt for that Wasmtime.
 
 ### Host (`crates/host`)
 
@@ -214,7 +185,7 @@ Local (`NITRUM_FN_ENV=local`): `NoopAttestor` — no Nitro document. Cloud: `Nit
 
 ### Executor (`crates/executor`)
 
-Wasmtime runner shared by host (invoke) and worker (AOT).
+Wasmtime runner shared by host (invoke) and api (publish validate). Publish-time `validate` is structural + ABI only (`Module::validate` + section walk) — Cranelift runs only inside the enclave at invoke.
 
 Guest ABI v0:
 
@@ -238,22 +209,17 @@ No request bodies. The catalog is a name → hash map plus egress policy.
 
 ### Artifacts (`crates/artifacts`)
 
-One S3 bucket, keys `artifacts/{sha256}.wasm` and `artifacts/{sha256}.cwasm`. `get` re-hashes wasm bytes and rejects mismatch.
-
-### Messaging (`crates/messaging`)
-
-SNS `PublishBus` on accept; SQS consumer for the worker. Payload is `PublishQueuedEvent` (`function`, `content_hash`, `wasm_bytes`, `queued_at_ms`, `egress_allow`).
+One S3 bucket, keys `artifacts/{sha256}.wasm`. `get` re-hashes wasm bytes and rejects mismatch.
 
 ### Domain / application (`crates/domain`, `crates/application`)
 
-Pure types and use cases. Ports: `FunctionCatalog`, `ArtifactStore`, `FunctionRunner`, `PublishBus`, `PublishLock`, `CompileQueue`, `FunctionAttestor`. Only composition roots (`api`, `host`, `publish-worker`) wire AWS / Wasmtime.
+Pure types and use cases. Ports: `FunctionCatalog`, `ArtifactStore`, `FunctionRunner`, `PublishLock`, `FunctionAttestor`. Composition roots `api` and `host` wire Wasmtime.
 
 ```mermaid
 flowchart TB
   CLI[cli]
   API[api]
   HOST[host]
-  PW[publish-worker]
 
   subgraph hex [Hexagonal core]
     UC[application use cases]
@@ -263,7 +229,6 @@ flowchart TB
   subgraph adapters [Adapters]
     CAT[catalog]
     ART[artifacts]
-    MSG[messaging]
     EX[executor]
   end
 
@@ -271,23 +236,18 @@ flowchart TB
   CLI --> HOST
   API --> UC
   HOST --> UC
-  PW --> UC
   UC --> DOM
   API --> CAT
   API --> ART
-  API --> MSG
   HOST --> CAT
   HOST --> ART
   HOST --> EX
-  PW --> CAT
-  PW --> ART
-  PW --> MSG
-  PW --> EX
+  API --> EX
 ```
 
 
 
-Trust rule in crate terms: only `host` → `InvokeFunction` → `executor` sees plaintext bodies. `runtime` is not on that path; it is compiled into user wasm.
+Trust rule in crate terms: only `host` → `InvokeFunction` → `executor` sees plaintext bodies. `runtime` is not on that path; it is compiled into user wasm. Publish-time `validate` in `api` never runs Cranelift.
 
 ## Publish pipeline
 
@@ -297,29 +257,18 @@ sequenceDiagram
   participant API
   participant Lock as Publish lock
   participant S3
-  participant SNS
-  participant SQS
-  participant W as Publish worker
   participant Cat as Catalog
 
   CLI->>API: PUT /functions/{name} application/wasm
-  API->>API: sha256, size ≤ 2 MiB
+  API->>API: Module::validate + ABI check, sha256, size ≤ 2 MiB
   API->>Lock: acquire(name, hash)
   alt already locked
     API-->>CLI: 409 Conflict
   else
     API->>S3: put artifacts/{hash}.wasm
-    API->>SNS: PublishQueuedEvent
-    API-->>CLI: 202 queued
-    SNS->>SQS: fan-out
-    W->>SQS: receive
-    W->>S3: get wasm, re-hash
-    W->>W: Wasmtime AOT
-    W->>S3: put artifacts/{hash}.cwasm
-    W->>Cat: upsert name@latest if generation ≥ stored
-    W->>Lock: release(name, hash)
-    CLI->>API: GET /functions/{name} (poll)
-    API-->>CLI: hash matches → ready
+    API->>Cat: upsert name@latest
+    API->>Lock: release(name, hash)
+    API-->>CLI: 200 ready
   end
 ```
 
@@ -433,13 +382,13 @@ config/{api|host|worker}/{NITRUM_FN_ENV}.yaml
 NITRUM_FN_* environment
 ```
 
-Default `NITRUM_FN_ENV` is `local`. The enclave gets the overlay from SSM after the data-plane clears process env. Bucket and table **names** are literals in `config/shared/{staging,prod}.yaml`; Terraform `yamldecode`s the same files. Account-specific ARNs (SNS, SQS) still come from ECS env.
+Default `NITRUM_FN_ENV` is `local`. The enclave gets the overlay from SSM after the data-plane clears process env. Bucket and table **names** are literals in `config/shared/{staging,prod}.yaml`; Terraform `yamldecode`s the same files. Port and prefix live in `config/*.yaml`.
 
 Host config is resolved next to the binary so the EIF does not depend on cwd.
 
 ## Local topology
 
-Compose runs **emulators only** (Floci: S3 + SNS + SQS + DynamoDB on `:4566`). `api`, `host`, and `publish-worker` stay on `cargo run`.
+Compose runs **emulators only** (Floci: S3 + DynamoDB on `:4566`). `api` and `host` stay on `cargo run`.
 
 
 | Process | Default port |
@@ -464,7 +413,6 @@ Same use cases and adapters as cloud; attestation is a no-op.
 | Invoke HTTP body      | 1 MiB                |
 | Guest `invoke` output | 1 MiB                |
 | Guest linear memory   | 64 MiB               |
-| AOT `.cwasm`          | 16 MiB               |
 | Invoke wall clock     | 15 s                 |
 | Egress origins        | 8                    |
 | Outbound URL          | 2048 bytes           |
