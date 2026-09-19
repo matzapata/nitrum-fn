@@ -20,12 +20,6 @@ variable "retain" {
   description = "When true, enable rotation / PITR / DDB deletion protection (typical prod). Staging default is false."
 }
 
-variable "eif_s3_key" {
-  type        = string
-  default     = ""
-  description = "S3 object key of the EIF. Empty (recommended) uses {eif_version_label}.eif, which is what the Nitrum control-plane downloads."
-}
-
 variable "eif_source_path" {
   type        = string
   default     = ""
@@ -72,18 +66,6 @@ variable "api_desired_count" {
   type        = number
   default     = 1
   description = "Fargate desired count. The image must exist in the registry before the service can start."
-}
-
-variable "worker_image" {
-  type        = string
-  default     = "ghcr.io/matzapata/nitrum-fn/publish-worker:latest"
-  description = "Full container image URI for nitrum-fn-publish-worker. Override for Docker Hub or another GHCR repo."
-}
-
-variable "worker_desired_count" {
-  type        = number
-  default     = 1
-  description = "Publish worker Fargate desired count."
 }
 
 variable "asg_min_size" {

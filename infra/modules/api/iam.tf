@@ -51,10 +51,11 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
-    sid    = "CatalogRead"
+    sid    = "CatalogReadWrite"
     effect = "Allow"
     actions = [
       "dynamodb:GetItem",
+      "dynamodb:PutItem",
       "dynamodb:Query",
     ]
     resources = [var.catalog_table_arn]
@@ -69,13 +70,6 @@ data "aws_iam_policy_document" "task" {
       "dynamodb:DeleteItem",
     ]
     resources = [var.publish_lock_table_arn]
-  }
-
-  statement {
-    sid       = "PublishSns"
-    effect    = "Allow"
-    actions   = ["sns:Publish"]
-    resources = [var.publish_topic_arn]
   }
 
   statement {

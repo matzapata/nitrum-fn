@@ -8,22 +8,30 @@ variable "project_name" {
   }
 }
 
+variable "artifacts_bucket_name" {
+  type        = string
+  description = "S3 artifacts bucket name from config/shared/{run_env}.yaml (artifacts.bucket)."
+}
+
+variable "catalog_table_name" {
+  type        = string
+  description = "DynamoDB catalog table name from config/shared/{run_env}.yaml (catalog.table)."
+}
+
+variable "publish_lock_table_name" {
+  type        = string
+  description = "DynamoDB publish-lock table name from config/shared/{run_env}.yaml (catalog.publish_lock_table)."
+}
+
+variable "run_env" {
+  type        = string
+  description = "NITRUM_FN_ENV overlay name reinjected via SSM for the enclave host (e.g. staging, prod)."
+}
+
 variable "retain" {
   type        = bool
   default     = false
   description = "When true, enable DDB PITR and deletion protection; S3 objects are not force-destroyed."
-}
-
-variable "eif_s3_key" {
-  type        = string
-  default     = "enclave.eif"
-  description = "S3 object key of the EIF (control-plane expects {eif-hash}.eif)."
-}
-
-variable "sns_alarm_topic_arn" {
-  type        = string
-  default     = ""
-  description = "Optional SNS topic ARN for CloudWatch alarms. Empty string disables alarm resources."
 }
 
 variable "log_retention_in_days" {

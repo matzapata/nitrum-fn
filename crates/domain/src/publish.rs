@@ -1,9 +1,34 @@
-use crate::{ContentHash, FunctionId, VersionLabel};
+use std::fmt;
+
+use crate::{ContentHash, EgressOrigin, FunctionId, VersionLabel};
 
 #[derive(Debug, Clone)]
 pub struct PublishRequest {
     pub function: FunctionId,
     pub wasm: Vec<u8>,
+    pub egress_allow: Vec<EgressOrigin>,
+}
+
+/// Outcome of a catalog upsert after wasm was stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishStatus {
+    Ready,
+    Superseded,
+}
+
+impl PublishStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
+impl fmt::Display for PublishStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -12,39 +37,18 @@ pub struct PublishResponse {
     pub version: VersionLabel,
     pub content_hash: ContentHash,
     pub wasm_bytes: usize,
-    /// Publish accept status (`"queued"` while AOT runs).
-    pub status: &'static str,
+    pub egress_allow: Vec<EgressOrigin>,
+    pub status: PublishStatus,
 }
 
-/// Event published when a `.wasm` is stored and awaiting AOT compile.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PublishQueuedEvent {
-    pub function: String,
-    pub content_hash: String,
-    pub wasm_bytes: usize,
-    /// Unix millis at enqueue time. Catalog upserts ignore older generations.
-    #[serde(default)]
-    pub queued_at_ms: u64,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl PublishQueuedEvent {
-    pub fn new(
-        function: impl Into<String>,
-        content_hash: impl Into<String>,
-        wasm_bytes: usize,
-    ) -> Self {
-        Self {
-            function: function.into(),
-            content_hash: content_hash.into(),
-            wasm_bytes,
-            queued_at_ms: unix_now_ms(),
-        }
+    #[test]
+    fn status_wire_strings() {
+        assert_eq!(PublishStatus::Ready.as_str(), "ready");
+        assert_eq!(PublishStatus::Superseded.as_str(), "superseded");
+        assert_eq!(PublishStatus::Ready.to_string(), "ready");
     }
-}
-
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }

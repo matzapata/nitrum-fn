@@ -9,7 +9,6 @@ pub struct ApiConfig {
     pub server: ServerConfig,
     pub artifacts: ArtifactsConfig,
     pub catalog: CatalogConfig,
-    pub publish: PublishConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,12 +27,6 @@ pub struct ArtifactsConfig {
 pub struct CatalogConfig {
     pub table: String,
     pub publish_lock_table: String,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PublishConfig {
-    pub topic_arn: String,
     pub endpoint: Option<String>,
 }
 

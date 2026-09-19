@@ -1,139 +1,206 @@
 # Contributing
 
-How to develop, test, and run a staging e2e. Product context lives in [`README.md`](README.md); Terraform modules in [`infra/README.md`](infra/README.md).
+Product context: `[README.md](README.md)`. Terraform modules: `[infra/README.md](infra/README.md)`.
 
 ## Prerequisites
 
-- Rust **1.95** (`rust-toolchain.toml`; rustup installs it)
-- Docker (Compose for local S3/DynamoDB; Buildx/QEMU on Apple Silicon for `linux/amd64` images)
-- `wasm32-unknown-unknown` for guest examples: `rustup target add wasm32-unknown-unknown`
-- **[Nitrum CLI](https://github.com/matzapata/nitrum)** for EIF build (`nitrum build`). Staging also needs AWS credentials, Terraform ≥ 1.5, and a state backend (see [infra README](infra/README.md#prerequisites-once-per-account)).
-
-Install the CLI (see [Nitrum’s README](https://github.com/matzapata/nitrum#installation-prebuilt-binary)):
+- Rust **1.95** (`rust-toolchain.toml`)
+- Docker (Compose for Floci; Buildx/QEMU on Apple Silicon for `linux/amd64`)
+- Guest examples: `rustup target add wasm32-unknown-unknown`
+- Staging / EIF: [Nitrum CLI](https://github.com/matzapata/nitrum) (`nitrum build` / `nitrum describe`), AWS credentials, Terraform ≥ 1.5, and a state backend ([infra README](infra/README.md#prerequisites-once-per-account))
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum/develop/scripts/install-nitrum.sh | bash
-nitrum --help
 ```
 
-Local fmt/test/`local.sh` run without `nitrum`. Staging e2e uses `nitrum build` (and `nitrum describe`) for the EIF. Terraform in this repo owns the VPC, Fargate API, and optional enclave fleet.
-
-The API is the ALB hostname over HTTP. Invoke TLS is self-signed in the enclave (`curl -k` against the NLB DNS). Leave `[tls_termination] acme = false` in `nitrum.toml`.
+Local checks and `bash tests/e2e/local.sh` do **not** need `nitrum` (local e2e scaffolds via `nitrum-fn new` and builds wasm). Do **not** use `nitrum cloud deploy` — this repo’s Terraform owns the stack. Use `nitrum build` / `describe` only. Keep `[tls_termination] acme = false` in `nitrum.toml` (self-signed invoke TLS; `curl -k` against the NLB).
 
 ## Checks
 
-CI (`.github/workflows/ci.yml`) runs format, Clippy, `cargo audit`, unit tests (`--lib --bins`), Floci adapter tests (`catalog` / `artifacts` integration tests), and `tests/e2e/local.sh`. Match that locally:
+Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo audit
-cargo test --workspace --lib --bins
-docker compose up -d --remove-orphans floci
-NITRUM_FN_ARTIFACTS__ENDPOINT=http://127.0.0.1:4566 \
-NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:4566 \
-AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
-  cargo test --tests -p catalog -p artifacts
-bash tests/e2e/local.sh
-```
 
-`local.sh` runs the same split as cloud: **api** (publish/catalog) + **publish-worker** (AOT) + **host** (invoke) against emulators.
+| Target                    | What                                                |
+| ------------------------- | --------------------------------------------------- |
+| `make format`             | `cargo fmt --all`                                   |
+| `make check`              | fmt check + Clippy (`-D warnings`)                  |
+| `make audit`              | `cargo audit`                                       |
+| `make test`               | `cargo test --workspace --lib --bins`               |
+| `make adapters`           | Floci + catalog/artifacts integration tests         |
+| `bash tests/e2e/local.sh` | local publish + invoke                              |
+| `make ci`                 | `check` + `audit` + `test` + `adapters` + local e2e |
+
+
+
 
 ## Local stack
 
-Publish is async: the **api** publishes to Floci **SNS**, which fans out to **SQS**; **publish-worker** AOT-compiles; the **host** invokes from the catalog + S3 artifacts. Compose starts Floci (S3+SNS+SQS+DynamoDB) and `aws-init` creates the bucket, tables, topic, and queue (`config/shared/local.yaml`).
+Compose runs **emulators only** (Floci: S3 + DynamoDB, plus `aws-init`). **api** and **host** stay off Compose so the inner loop is `cargo run` — incremental compiles, debugger, no image rebuild on every change.
 
 ```bash
-docker compose up -d --remove-orphans floci
-docker compose run --rm aws-init
+make stack
 
-# `config/shared/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
-
-cargo run -p publish-worker &
 cargo run -p api &
 cargo run -p host
 ```
 
-In another terminal:
+Then:
 
 ```bash
-bash examples/hello-world/deploy-local.sh
-curl -X POST http://127.0.0.1:8081/invoke/hello-world \
-  -H 'content-type: application/json' -d '{}'
+./examples/hello-world/e2e.sh
 ```
 
-## Staging e2e (cloud)
+Automated platform smoke (`nitrum-fn new` → build → deploy → invoke): `bash tests/e2e/local.sh`. Tear down emulators: `make stack-down`.
 
-Two deployables share one VPC by default: **API** (Fargate + HTTP ALB) and **publish-worker** (Fargate, SQS → AOT). The **enclave** (NLB TCP passthrough, invoke) is optional — apply the API/worker first; turn the fleet on after you have an EIF and PCR0.
+## Images
 
-`nitrum build` always builds `./Dockerfile` as **linux/amd64** (QEMU on Apple Silicon). The API is `Dockerfile.api`; the publish worker is `Dockerfile.publish-worker` (musl, so `.cwasm` matches the enclave).
 
-Fargate pulls **public** images. CI on `main` publishes `ghcr.io/matzapata/nitrum-fn/api` and `ghcr.io/matzapata/nitrum-fn/publish-worker` (those are the Terraform defaults). Make the GHCR packages public (repo → Packages → package settings → Change visibility) so ECS can pull without a PAT. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry.
+| File             | Binary                        | Where                                 |
+| ---------------- | ----------------------------- | ------------------------------------- |
+| `Dockerfile`     | data-plane + `nitrum-fn-host` | EIF via `nitrum build`; GHCR `…/host` |
+| `Dockerfile.api` | `nitrum-fn-api`               | Fargate / GHCR `…/api`                |
 
-### 1. Terraform (API + worker)
 
 ```bash
-cd infra/envs/staging
-cp backend.hcl.example backend.hcl          # bucket, lock table, region; gitignored
-cp terraform.tfvars.example terraform.tfvars  # enable_enclave = false
-terraform init -backend-config=backend.hcl
-terraform apply
+make images            # local linux/amd64 builds of api and host; no push
+make api               # just the API image
+make host              # just the enclave host image (input to `nitrum build`)
+
+# Override registry/tag per invocation:
+make api TAG=sha-1234
+make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=dev
 ```
 
-Wait until `curl "$(terraform -chdir=infra/envs/staging output -raw api_url)/healthz"` returns 200. You can deploy here (CLI polls until the worker catalogs the function); invoke needs the enclave. If you retag `:latest` without changing the image URI, force a new ECS deployment:
+Pushing a `v*` tag runs `[.github/workflows/release.yml](.github/workflows/release.yml)`: CI, then parallel jobs `api`, `host`, and `cli`. GHCR remains `…/{api,host}:latest` / `:$tag` / `:$sha`. The GitHub Release attaches `nitrum-fn.eif`, `nitrum-fn.eif.json` (sha256 + PCR0), and CLI binaries (`nitrum-fn-linux-x86_64`, `nitrum-fn-darwin-aarch64`, `nitrum-fn-windows-x86_64.exe`). Packages must be **public** so ECS can pull without a PAT. Pin `api_image` in `terraform.tfvars` to the release tag.
+
+If Terraform still pins `:latest`, force ECS redeploy:
 
 ```bash
 aws ecs update-service --cluster nitrum-fn-api --service nitrum-fn-api --force-new-deployment
-aws ecs update-service --cluster nitrum-fn-worker --service nitrum-fn-worker --force-new-deployment
 ```
 
-### 2. Build the EIF
 
-`nitrum.toml` is copied into the EIF. Keep `acme = false`. From the repo root (`nitrum build` reads `./Dockerfile` + `nitrum.toml`):
+
+## Cloud e2e
+
+Not in GitHub Actions. Backend/state: [infra/README.md](infra/README.md).
+
+Scripts do **not** load `.env`. Copy [`.env.example`](.env.example) once, fill keys, then source it in your shell. After apply recreates the ALB/NLB, unset stale `NITRUM_FN_*` in `.env` (destroyed LB hostnames NXDOMAIN).
+
+From repo root. Tag the API image with the git SHA so ECS rolls. `nitrum build` is the host image — skip `make host`.
+
+```bash
+export TF_DIR=infra/envs/staging
+export TAG="$(git rev-parse --short HEAD)"
+export API_IMAGE="<registry>/<image>:${TAG}"   # must be public; Fargate pulls this
+
+cp .env.example .env   # once
+set -a && source .env && set +a
+```
+
+### 1. API image — build + push
+
+```bash
+make api API_IMAGE="${API_IMAGE}"
+docker push "${API_IMAGE}"
+echo "${API_IMAGE}"
+```
+
+### 2. EIF — `nitrum build`
 
 ```bash
 nitrum build
 ```
 
-That writes `.nitrum/artifacts/nitrum-fn.eif` and prints **EIF hash (sha256)** and **PCR0**. Re-inspect later with `nitrum describe` (see [Nitrum usage](https://github.com/matzapata/nitrum/blob/develop/docs/usage.md)). Terraform uploads the EIF on the next apply (no `aws s3 cp`).
+From the output, copy:
 
-### 3. Enable the fleet
+- `EIF hash (sha256): <64 hex>` → first **12** chars = `eif_version_label`
+- `PCR0: <96 hex>` → `eif_image_sha384`
 
-In `infra/envs/staging/terraform.tfvars`:
+File must exist: `.nitrum/artifacts/nitrum-fn.eif`
+
+### 3. Edit `infra/envs/staging/terraform.tfvars`
 
 ```hcl
 enable_enclave    = true
-eif_version_label = "<first 12 hex of EIF sha256 from nitrum build>"
+api_image         = "<paste $API_IMAGE>"
+eif_version_label = "<first 12 hex of EIF sha256>"
 eif_image_sha384  = "<PCR0 from nitrum build>"
 ```
 
-```bash
-terraform -chdir=infra/envs/staging apply
-```
-
-The apply uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates the NLB/ASG. Every new EIF: `nitrum build`, bump **both** labels, apply (object updates, launch template rolls the ASG).
-
-### 4. Cloud smoke
-
-Enclave boot can take several minutes (`cloud.sh` waits up to 10 minutes).
+Bump **both** `eif_*` fields every rebuild.
 
 ```bash
-export NITRUM_FN_API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
-export NITRUM_FN_INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw invoke_url)"
-bash tests/e2e/cloud.sh
+unset NITRUM_FN_API_URL NITRUM_FN_INVOKE_URL NITRUM_FN_PCR0
 ```
 
-That deploys `hello-world` to the ALB and `POST /invoke/hello-world` on the NLB (`curl -k`). Success body: `{"message":"Hello, world!"}`. On failure the script prints both URLs; check ECS (API) or ASG / control-plane logs (enclave).
+### 4. Apply
 
-This job is **not** in GitHub Actions.
+First time in this env:
 
-## Images
+```bash
+cp "${TF_DIR}/backend.hcl.example" "${TF_DIR}/backend.hcl"
+cp "${TF_DIR}/terraform.tfvars.example" "${TF_DIR}/terraform.tfvars"
+# then edit terraform.tfvars as in step 3
+terraform -chdir="${TF_DIR}" init -backend-config=backend.hcl
+```
 
-| File | Binary | Where |
-|---|---|---|
-| `Dockerfile` | data-plane + `nitrum-fn-host` | EIF via `nitrum build` |
-| `Dockerfile.api` | `nitrum-fn-api` | Fargate / GHCR `…/api` (store `.wasm`, SNS publish) |
-| `Dockerfile.publish-worker` | `nitrum-fn-publish-worker` (musl) | Fargate / GHCR `…/publish-worker` (SQS → AOT `.cwasm`) |
+```bash
+terraform -chdir="${TF_DIR}" apply
+```
 
-The **publish-worker** must be musl so `.cwasm` matches the enclave. Invoke **only deserializes** `.cwasm`. After rolling a new worker image, **republish** functions so S3 AOT blobs are rebuilt.
+If you reuse the same `api_image` string, apply is a no-op for ECS — force a roll:
+
+```bash
+aws ecs update-service --cluster nitrum-fn-api --service nitrum-fn-api --force-new-deployment
+```
+
+### 5. Platform e2e
+
+Resolves `api_url` / `invoke_url` / `pcr0` from terraform outputs unless already set. Waits up to ~10m for enclave boot.
+
+```bash
+./tests/e2e/cloud.sh
+```
+
+### 6. Hello-world example
+
+This script does not read terraform. Use values from `.env`, or:
+
+```bash
+export NITRUM_FN_API_URL="$(terraform -chdir="${TF_DIR}" output -raw api_url)"
+export NITRUM_FN_INVOKE_URL="$(terraform -chdir="${TF_DIR}" output -raw invoke_url)"
+export NITRUM_FN_PCR0="$(terraform -chdir="${TF_DIR}" output -raw pcr0)"
+
+./examples/hello-world/e2e.sh
+```
+
+### 7. Oracle example
+
+Needs `PRIVATE_KEY`, `BASE_SEPOLIA_RPC_URL`, `ORACLE_ADDRESS` in the environment. First time: `git submodule update --init --recursive`. `e2e.sh` runs `setEnclave` for the new PCR0/wasm. Skip env URLs; it falls back to terraform outputs.
+
+```bash
+./examples/oracle/e2e.sh
+```
+
+
+
+
+## Releases
+
+Push a SemVer tag (`vMAJOR.MINOR.PATCH`). The [Release workflow](.github/workflows/release.yml) re-runs CI, then:
+
+
+| Job    | Publishes                                                    |
+| ------ | ------------------------------------------------------------ |
+| `api`  | GHCR `…/api`                                                 |
+| `host` | GHCR `…/host` + EIF + measurements                           |
+| `cli`  | `nitrum-fn-{linux-x86_64,darwin-aarch64,windows-x86_64.exe}` |
+
+
+Install the CLI: `curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-fn/main/scripts/install-nitrum-fn.sh | bash` (or `NITRUM_FN_VERSION=v…`).
+
+1. **Fargate (**`api`**)** — pin `api_image` to `:$tag`. Force ECS redeploy if the URI is still `:latest`.
+2. **Host** — download `nitrum-fn.eif` from the release into `.nitrum/artifacts/`, copy `eif_version_label` / `eif_image_sha384` from `nitrum-fn.eif.json` (or the release notes), `terraform apply`. Rebuild with `nitrum build` only when you want a new PCR0.
+

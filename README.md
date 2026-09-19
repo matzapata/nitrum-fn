@@ -4,14 +4,27 @@ WASM functions on [Nitrum](https://github.com/nitrum) enclaves.
 
 Develop, test, and run staging e2e: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
-`nitrum-fn` is the functions product that runs on Nitrum: developers publish `.wasm`, callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave, and the host runs the guest with Wasmtime. Nitrum stays the platform (EIF, TLS/ACME, attestation, ASG/NLB). This repo is the WASM host, catalog, and CLI.
+- **[Architecture](docs/architecture.md)** — platform, trust boundary, crates, publish/invoke pipelines.
+- **[Usage](docs/usage.md)** — write a function, config, deploy, invoke, Solidity verification.
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-fn/main/scripts/install-nitrum-fn.sh | bash
+# pin a release: NITRUM_FN_VERSION=v0.1.0 bash …
+# from source: cargo install --git https://github.com/matzapata/nitrum-fn --locked --bin nitrum-fn
+```
+
+Prebuilt binaries ship on GitHub Releases for Linux x86_64, macOS Apple Silicon, and Windows x86_64. Contributors working in this repo can keep using `cargo run -p cli -- …`.
+
+`nitrum-fn` is the functions product that runs on Nitrum: developers publish `.wasm`, callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave, and the host runs the guest with Wasmtime. Nitrum stays the platform (EIF, TLS/ACME, attestation, ASG/NLB). This repo is the WASM host, catalog, CLI, and later payments.
 
 ## Features
 
 - **Shared ingress.** Any healthy worker can serve any function. The NLB is TCP passthrough; after TLS, `POST /invoke/{fn}` selects the function.
 - **TLS-in-enclave only.** The private key and plaintext request bodies stay in the enclave. Intermediaries (DNS, NLB) see ciphertext. Catalog and CLI see metadata and code artifacts.
 - **Fast path inside a long-lived enclave.** Scale by WASM instances. Enclave boot is fleet capacity.
-- **Content-hash catalog.** Publish stores `.wasm` and queues AOT; the worker writes musl `.cwasm` and upserts the catalog. Invoke resolves a version label to that hash and deserializes the precompiled module (load-only).
+- **Content-hash catalog.** Publish validates guest ABI, stores `.wasm`, and upserts the catalog. Invoke resolves a version label to that hash, re-hashes the `.wasm`, and Cranelift-compiles it in the enclave.
 - **Function SDK.** Guest code uses `Request` / `Response` runtime compiled *into* the `.wasm`.
 - **CLI-first.** Deploy and invoke are machine-native.
 - **Observability.** Invoke count, latency, traps, and cold vs warm go through Nitrum’s OTel path (CloudWatch / Grafana).
@@ -23,7 +36,7 @@ Nitrum is the enclave platform. `nitrum-fn` is the FaaS product on top of it.
 | Nitrum (platform) | nitrum-fn (this repo) |
 |---|---|
 | EIF build, control-plane, data-plane TLS/ACME | WASM host (`/invoke`, module/instance cache) |
-| Attestation, KMS DEK, egress, OTel plumbing | Function catalog, artifact store, AOT publish-worker |
+| Attestation, KMS DEK, egress, OTel plumbing | Function catalog, artifact store |
 | `nitrum cloud deploy` / ASG / NLB | Deploy CLI |
 
 **Why a separate repo:** independent release cadence (PCR0 stays stable across host changes) and a focused product surface: WASM host, catalog, and CLI.
@@ -54,43 +67,67 @@ nitrum-fn/
 │   ├── catalog/         # name → version, sha256 (no bodies)
 │   ├── artifacts/       # get/put .wasm by content hash
 │   ├── host/            # enclave start_command — HTTP /invoke
-│   ├── api/             # deploy / management (store + enqueue)
-│   ├── publish-worker/  # SQS → AOT .cwasm + catalog upsert
-│   ├── messaging/       # SNS publish bus / SQS consumer
+│   ├── api/             # deploy / management (validate + store + catalog)
 │   ├── telemetry/       # OTel init shared by bins
-│   └── cli/             # talks to api (polls until ready)
-└── examples/hello-world/
+│   ├── cli/             # talks to api
+│   └── payments/        # x402 (later)
+└── examples/
+    ├── hello-world/
+    └── oracle/              # enclave guest + Foundry on-chain consumer
 ```
 
 The invoke path (`host` → `InvokeFunction` → `executor`) sees plaintext bodies. Publish / catalog / API see metadata and code artifacts. `runtime` is linked into guest `.wasm`.
 
 ## Local development (S3 + DynamoDB)
 
-Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` / `.cwasm` artifacts live in S3. Publish events fan out on SNS to an SQS compile queue. For local store testing, run [Floci](https://floci.io) (S3 + SNS + SQS + DynamoDB on `:4566`); run **api** (publish), **publish-worker** (AOT), and **host** (invoke).
+Catalog rows live in DynamoDB (`fn_id` + `label` → content hash). `.wasm` artifacts live in S3. For local store testing, run [Floci](https://floci.io) (S3 + DynamoDB on `:4566`); run **api** (publish + catalog) and **host** (invoke).
 
 ```bash
 # 1. Start Floci (:4566) and provision the store
 docker compose up -d --remove-orphans floci
 docker compose run --rm aws-init
 
-# 2. Run api + publish-worker + host against the emulators
+# 2. Run api + host against the emulators
 # `config/shared/local.yaml` has Floci/DynamoDB values (`NITRUM_FN_ENV=local` by default).
 export AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
-cargo run -p publish-worker &
 cargo run -p api &
 cargo run -p host
 
-# 3. Deploy to the API, invoke on the host (CLI polls until the worker catalogs the function)
+# 3. Deploy to the API, invoke on the host
 cargo run -p cli -- deploy ./examples/hello-world/.../hello_world.wasm --name hello-world
-curl -X POST http://127.0.0.1:8081/invoke/hello-world -H 'content-type: application/json' -d '{}'
+# Host returns x-nitrum-fn-shasum (sha256 of the .wasm it compiled). Local: no Nitro quote.
+HASH=$(cargo run -p cli --quiet -- describe ./examples/hello-world/.../hello_world.wasm \
+  | awk -F= '/^hash=/{print $2}')
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' \
+  --fn-shasum "$HASH"
 ```
 
 End-to-end smoke: `bash tests/e2e/local.sh`. Full contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`.
+### Verify which wasm ran
+
+The host loads `{hash}.wasm`, re-hashes the bytes, Cranelift-compiles them, and echoes `x-nitrum-fn-shasum`. That proves the **artifact you uploaded**, not a fresh local rebuild of source.
+
+`nitrum-fn describe` prints that hash from a local `.wasm` (`hash=` / `wasm_bytes=`). Pass it to invoke as `--fn-shasum` (same as `shasum -a 256`).
+
+```bash
+# Local (Floci): hash header only
+HASH=$(cargo run -p cli --quiet -- describe ./path/to/fn.wasm | awk -F= '/^hash=/{print $2}')
+cargo run -p cli -- invoke hello-world --url http://127.0.0.1:8081 -d '{}' --fn-shasum "$HASH"
+
+# Staging enclave: pin PCR0 from `nitrum build` / `nitrum describe` (`NITRUM_FN_PCR0` or `--pcr0`); host mints NSM user_data = H || sha256(body)
+export NITRUM_FN_PCR0="<pcr0 hex from nitrum build>"
+cargo run -p cli -- invoke oracle --url "$INVOKE_URL" --insecure -d '{"ids":["eth"]}' \
+  --fn-shasum "$HASH" \
+  --attestation-out attestation.bin
+```
+
+On-chain consumer (Foundry + [`base/nitro-validator`](https://github.com/base/nitro-validator)): [`examples/oracle/README.md`](examples/oracle/README.md). Demo: [`docs/assets/oracle-demo.mp4`](docs/assets/oracle-demo.mp4).
+
+**Observability** uses Nitrum’s OTel path. Long-running bins always log to stdout; when `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs over OTLP (**gRPC** by default). Leave the endpoint unset for stdout-only local runs. In staging, Fargate api/worker and the Nitro host run an ADOT collector that writes EMF metrics to a shared `/nitrum/<project>/metrics` log group (optional X-Ray via `enable_xray_tracing`). HTTP latency uses `http.server.request.duration`; product/business metrics are not defined yet.
 
 ## Cloud deploy
 
-Staging Terraform lives in [`infra/`](infra/README.md). Fargate images default to GHCR (`ghcr.io/matzapata/nitrum-fn/api` and `…/publish-worker`, published by CI). Apply the API first (`enable_enclave = false`), then the fleet once you have an EIF and PCR0. Publish is HTTP to the ALB; invoke is self-signed TLS on the NLB (`curl -k`). Ordered steps and `tests/e2e/cloud.sh`: [CONTRIBUTING.md](CONTRIBUTING.md#staging-e2e-cloud).
+Staging Terraform lives in [`infra/`](infra/README.md). Fargate images default to GHCR (`ghcr.io/matzapata/nitrum-fn/api`, published by the Release workflow on `v*` tags). Apply the API without enclaves first (`enable_enclave = false`), then the fleet once you have an EIF and PCR0. No custom DNS: publish is HTTP to the ALB; invoke is self-signed TLS on the NLB (`curl -k`). Ordered steps and `tests/e2e/cloud.sh`: [CONTRIBUTING.md](CONTRIBUTING.md#cloud-e2e).
 
-The enclave image is [`Dockerfile`](Dockerfile) (`nitrum build`). The Fargate API is [`Dockerfile.api`](Dockerfile.api); the publish worker is [`Dockerfile.publish-worker`](Dockerfile.publish-worker). Terraform in this repo owns the stack.
+The enclave image is [`Dockerfile`](Dockerfile) (`nitrum build`). The Fargate API is [`Dockerfile.api`](Dockerfile.api). Terraform in this repo owns the stack.

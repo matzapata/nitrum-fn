@@ -1,3 +1,0 @@
-# Queue URL comes from ECS env.
-compile:
-  endpoint: null

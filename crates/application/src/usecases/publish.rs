@@ -1,27 +1,30 @@
 use crate::error::AppError;
-use crate::ports::{ArtifactStore, PublishBus, PublishLock};
+use crate::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishLock};
 use domain::{
-    ContentHash, PublishQueuedEvent, PublishRequest, PublishResponse, VersionLabel, MAX_WASM_BYTES,
+    ContentHash, PublishRequest, PublishResponse, PublishStatus, VersionLabel, MAX_WASM_BYTES,
 };
 use std::sync::Arc;
 use tracing::instrument;
 
 pub struct PublishFunction {
     artifacts: Arc<dyn ArtifactStore>,
-    bus: Arc<dyn PublishBus>,
+    catalog: Arc<dyn FunctionCatalog>,
     lock: Arc<dyn PublishLock>,
+    runner: Arc<dyn FunctionRunner>,
 }
 
 impl PublishFunction {
     pub fn new(
         artifacts: Arc<dyn ArtifactStore>,
-        bus: Arc<dyn PublishBus>,
+        catalog: Arc<dyn FunctionCatalog>,
         lock: Arc<dyn PublishLock>,
+        runner: Arc<dyn FunctionRunner>,
     ) -> Self {
         Self {
             artifacts,
-            bus,
+            catalog,
             lock,
+            runner,
         }
     }
 
@@ -37,11 +40,12 @@ impl PublishFunction {
             )));
         }
 
+        self.runner.validate(&req.wasm).await?;
+
         let hash = ContentHash::from_bytes(&req.wasm);
-        let event =
-            PublishQueuedEvent::new(req.function.to_string(), hash.to_hex(), req.wasm.len());
+        let queued_at_ms = unix_now_ms();
         self.lock
-            .acquire(&req.function, &hash, event.queued_at_ms)
+            .acquire(&req.function, &hash, queued_at_ms)
             .await?;
 
         let stored = match self.artifacts.put(&req.wasm).await {
@@ -52,9 +56,33 @@ impl PublishFunction {
             }
         };
 
-        if let Err(err) = self.bus.publish_queued(&event).await {
-            let _ = self.lock.release(&req.function, &hash).await;
-            return Err(err);
+        let applied = match self
+            .catalog
+            .upsert(
+                &req.function,
+                &VersionLabel::latest(),
+                hash.clone(),
+                queued_at_ms,
+                &req.egress_allow,
+            )
+            .await
+        {
+            Ok(applied) => applied,
+            Err(err) => {
+                let _ = self.lock.release(&req.function, &hash).await;
+                return Err(err);
+            }
+        };
+
+        self.lock.release(&req.function, &hash).await?;
+
+        if !applied {
+            tracing::info!(
+                function = %req.function,
+                hash = %hash,
+                queued_at_ms,
+                "skipped stale catalog upsert"
+            );
         }
 
         Ok(PublishResponse {
@@ -62,18 +90,30 @@ impl PublishFunction {
             version: VersionLabel::latest(),
             content_hash: stored,
             wasm_bytes: req.wasm.len(),
-            status: "queued",
+            egress_allow: req.egress_allow,
+            status: if applied {
+                PublishStatus::Ready
+            } else {
+                PublishStatus::Superseded
+            },
         })
     }
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::AppError;
-    use crate::ports::ArtifactStore;
+    use crate::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishLock, RunOutcome};
     use async_trait::async_trait;
-    use domain::FunctionId;
+    use domain::{FunctionId, FunctionVersion};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -120,50 +160,128 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
         }
-
-        async fn put_compiled(
-            &self,
-            _hash: &ContentHash,
-            _compiled: &[u8],
-        ) -> Result<(), AppError> {
-            Ok(())
-        }
-
-        async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-            Err(AppError::ArtifactMissing(hash.to_hex()))
-        }
     }
 
-    struct MemBus {
-        events: Mutex<Vec<PublishQueuedEvent>>,
+    struct MemCatalog {
+        hash: Mutex<Option<ContentHash>>,
         fail: bool,
+        refuse_stale: bool,
     }
 
-    impl MemBus {
+    impl MemCatalog {
         fn new() -> Self {
             Self {
-                events: Mutex::new(Vec::new()),
+                hash: Mutex::new(None),
                 fail: false,
+                refuse_stale: false,
             }
         }
 
         fn failing() -> Self {
             Self {
-                events: Mutex::new(Vec::new()),
+                hash: Mutex::new(None),
                 fail: true,
+                refuse_stale: false,
+            }
+        }
+
+        fn stale() -> Self {
+            Self {
+                hash: Mutex::new(None),
+                fail: false,
+                refuse_stale: true,
             }
         }
     }
 
     #[async_trait]
-    impl PublishBus for MemBus {
-        async fn publish_queued(&self, event: &PublishQueuedEvent) -> Result<(), AppError> {
+    impl FunctionCatalog for MemCatalog {
+        async fn upsert(
+            &self,
+            _id: &FunctionId,
+            _label: &VersionLabel,
+            hash: ContentHash,
+            _queued_at_ms: u64,
+            _egress_allow: &[domain::EgressOrigin],
+        ) -> Result<bool, AppError> {
             if self.fail {
-                return Err(AppError::Storage("bus down".into()));
+                return Err(AppError::Storage("ddb down".into()));
             }
-            self.events.lock().unwrap().push(event.clone());
+            if self.refuse_stale {
+                return Ok(false);
+            }
+            *self.hash.lock().unwrap() = Some(hash);
+            Ok(true)
+        }
+
+        async fn resolve(
+            &self,
+            id: &FunctionId,
+            label: &VersionLabel,
+        ) -> Result<FunctionVersion, AppError> {
+            let hash = self
+                .hash
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+            Ok(FunctionVersion {
+                id: id.clone(),
+                label: label.clone(),
+                content_hash: hash,
+                egress_allow: vec![],
+            })
+        }
+
+        async fn list(&self) -> Result<Vec<FunctionVersion>, AppError> {
+            Ok(vec![])
+        }
+    }
+
+    struct AcceptingRunner;
+
+    #[async_trait]
+    impl FunctionRunner for AcceptingRunner {
+        async fn validate(&self, _wasm: &[u8]) -> Result<(), AppError> {
             Ok(())
         }
+
+        async fn run(
+            &self,
+            _hash: &ContentHash,
+            _wasm: &[u8],
+            _input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
+        ) -> Result<RunOutcome, AppError> {
+            unimplemented!()
+        }
+    }
+
+    struct RejectingRunner;
+
+    #[async_trait]
+    impl FunctionRunner for RejectingRunner {
+        async fn validate(&self, _wasm: &[u8]) -> Result<(), AppError> {
+            Err(AppError::Compile("bad abi".into()))
+        }
+
+        async fn run(
+            &self,
+            _hash: &ContentHash,
+            _wasm: &[u8],
+            _input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
+        ) -> Result<RunOutcome, AppError> {
+            unimplemented!()
+        }
+    }
+
+    fn publish(
+        artifacts: Arc<MemArtifacts>,
+        catalog: Arc<MemCatalog>,
+        lock: Arc<MemLock>,
+    ) -> PublishFunction {
+        PublishFunction::new(artifacts, catalog, lock, Arc::new(AcceptingRunner))
     }
 
     struct MemLock {
@@ -214,15 +332,16 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_empty_wasm() {
-        let publish = PublishFunction::new(
+        let publish = publish(
             Arc::new(MemArtifacts::new()),
-            Arc::new(MemBus::new()),
+            Arc::new(MemCatalog::new()),
             Arc::new(MemLock::new()),
         );
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: vec![],
+                egress_allow: vec![],
             })
             .await
             .expect_err("empty");
@@ -230,39 +349,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_invalid_wasm_without_put() {
+        let artifacts = Arc::new(MemArtifacts::new());
+        let catalog = Arc::new(MemCatalog::new());
+        let lock = Arc::new(MemLock::new());
+        let publish = PublishFunction::new(
+            artifacts.clone(),
+            catalog.clone(),
+            lock.clone(),
+            Arc::new(RejectingRunner),
+        );
+        let err = publish
+            .execute(PublishRequest {
+                function: FunctionId::new("echo").unwrap(),
+                wasm: b"\0asm not a real module".to_vec(),
+                egress_allow: vec![],
+            })
+            .await
+            .expect_err("invalid");
+        assert!(matches!(err, AppError::Compile(_)), "{err}");
+        assert!(artifacts.wasm.lock().unwrap().is_empty());
+        assert!(catalog.hash.lock().unwrap().is_none());
+        assert!(lock.held.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn rejects_oversize_wasm_without_put() {
         let artifacts = Arc::new(MemArtifacts::new());
-        let bus = Arc::new(MemBus::new());
+        let catalog = Arc::new(MemCatalog::new());
         let lock = Arc::new(MemLock::new());
-        let publish = PublishFunction::new(artifacts.clone(), bus.clone(), lock.clone());
+        let publish = publish(artifacts.clone(), catalog.clone(), lock.clone());
         let wasm = vec![0u8; domain::MAX_WASM_BYTES + 1];
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm,
+                egress_allow: vec![],
             })
             .await
             .expect_err("too large");
         assert!(matches!(err, AppError::PayloadTooLarge(_)), "{err}");
         assert!(artifacts.wasm.lock().unwrap().is_empty());
-        assert!(bus.events.lock().unwrap().is_empty());
+        assert!(catalog.hash.lock().unwrap().is_none());
         assert!(lock.held.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn bus_error_after_put_releases_lock() {
+    async fn catalog_error_after_put_releases_lock() {
         let artifacts = Arc::new(MemArtifacts::new());
         let lock = Arc::new(MemLock::new());
-        let publish =
-            PublishFunction::new(artifacts.clone(), Arc::new(MemBus::failing()), lock.clone());
+        let publish = publish(
+            artifacts.clone(),
+            Arc::new(MemCatalog::failing()),
+            lock.clone(),
+        );
         let wasm = b"\0asm not empty".to_vec();
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             })
             .await
-            .expect_err("bus");
+            .expect_err("catalog");
         assert!(matches!(err, AppError::Storage(_)), "{err}");
         let hash = ContentHash::from_bytes(&wasm);
         assert_eq!(artifacts.get(&hash).await.unwrap(), wasm);
@@ -273,15 +422,16 @@ mod tests {
     #[tokio::test]
     async fn put_error_releases_lock() {
         let lock = Arc::new(MemLock::new());
-        let publish = PublishFunction::new(
+        let publish = publish(
             Arc::new(MemArtifacts::failing()),
-            Arc::new(MemBus::new()),
+            Arc::new(MemCatalog::new()),
             lock.clone(),
         );
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm not empty".to_vec(),
+                egress_allow: vec![],
             })
             .await
             .expect_err("put");
@@ -291,74 +441,152 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enqueue_records_hash_and_generation() {
-        let bus = Arc::new(MemBus::new());
+    async fn success_upserts_catalog_and_returns_ready() {
+        let catalog = Arc::new(MemCatalog::new());
         let lock = Arc::new(MemLock::new());
-        let publish =
-            PublishFunction::new(Arc::new(MemArtifacts::new()), bus.clone(), lock.clone());
+        let publish = publish(Arc::new(MemArtifacts::new()), catalog.clone(), lock.clone());
         let wasm = b"\0asm module".to_vec();
         let res = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             })
             .await
             .expect("publish");
-        assert_eq!(res.status, "queued");
-        let events = bus.events.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].content_hash, res.content_hash.to_hex());
-        assert!(events[0].queued_at_ms > 0);
-        assert!(lock.held.lock().unwrap().contains_key("echo"));
+        assert_eq!(res.status, PublishStatus::Ready);
+        assert_eq!(
+            catalog.hash.lock().unwrap().as_ref(),
+            Some(&ContentHash::from_bytes(&wasm))
+        );
+        assert!(lock.held.lock().unwrap().is_empty());
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_upsert_returns_superseded_and_releases() {
+        let catalog = Arc::new(MemCatalog::stale());
+        let lock = Arc::new(MemLock::new());
+        let publish = publish(Arc::new(MemArtifacts::new()), catalog.clone(), lock.clone());
+        let res = publish
+            .execute(PublishRequest {
+                function: FunctionId::new("echo").unwrap(),
+                wasm: b"\0asm module".to_vec(),
+                egress_allow: vec![],
+            })
+            .await
+            .expect("publish");
+        assert_eq!(res.status, PublishStatus::Superseded);
+        assert!(catalog.hash.lock().unwrap().is_none());
+        assert_eq!(*lock.releases.lock().unwrap(), 1);
     }
 
     #[tokio::test]
     async fn second_publish_while_locked_conflicts() {
-        let bus = Arc::new(MemBus::new());
+        let catalog = Arc::new(MemCatalog::new());
         let lock = Arc::new(MemLock::new());
-        let publish = PublishFunction::new(Arc::new(MemArtifacts::new()), bus.clone(), lock);
-        publish
-            .execute(PublishRequest {
-                function: FunctionId::new("echo").unwrap(),
-                wasm: b"\0asm one".to_vec(),
-            })
-            .await
-            .expect("first");
+        // Hold the lock as if another publish is in flight.
+        lock.held
+            .lock()
+            .unwrap()
+            .insert("echo".into(), "other".into());
+        let publish = publish(Arc::new(MemArtifacts::new()), catalog, lock);
         let err = publish
             .execute(PublishRequest {
                 function: FunctionId::new("echo").unwrap(),
                 wasm: b"\0asm two".to_vec(),
+                egress_allow: vec![],
             })
             .await
             .expect_err("conflict");
         assert!(matches!(err, AppError::Conflict(_)), "{err}");
-        assert_eq!(bus.events.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn concurrent_publishes_only_one_wins() {
-        let bus = Arc::new(MemBus::new());
+    async fn overlapping_publishes_conflict_while_lock_held() {
+        use tokio::sync::Notify;
+
+        struct HoldLock {
+            held: Mutex<HashMap<String, String>>,
+            first_acquired: Notify,
+            allow_release: Notify,
+        }
+
+        #[async_trait]
+        impl PublishLock for HoldLock {
+            async fn acquire(
+                &self,
+                function: &FunctionId,
+                hash: &ContentHash,
+                _queued_at_ms: u64,
+            ) -> Result<(), AppError> {
+                let mut held = self.held.lock().unwrap();
+                if held.contains_key(function.as_str()) {
+                    return Err(AppError::Conflict(format!(
+                        "publish already in progress for {function}"
+                    )));
+                }
+                held.insert(function.as_str().to_string(), hash.to_hex());
+                drop(held);
+                self.first_acquired.notify_one();
+                Ok(())
+            }
+
+            async fn release(
+                &self,
+                function: &FunctionId,
+                hash: &ContentHash,
+            ) -> Result<(), AppError> {
+                self.allow_release.notified().await;
+                let mut held = self.held.lock().unwrap();
+                if held
+                    .get(function.as_str())
+                    .is_some_and(|h| h == &hash.to_hex())
+                {
+                    held.remove(function.as_str());
+                }
+                Ok(())
+            }
+        }
+
+        let lock = Arc::new(HoldLock {
+            held: Mutex::new(HashMap::new()),
+            first_acquired: Notify::new(),
+            allow_release: Notify::new(),
+        });
         let publish = Arc::new(PublishFunction::new(
             Arc::new(MemArtifacts::new()),
-            bus.clone(),
-            Arc::new(MemLock::new()),
+            Arc::new(MemCatalog::new()),
+            lock.clone(),
+            Arc::new(AcceptingRunner),
         ));
-        let a = publish.execute(PublishRequest {
-            function: FunctionId::new("echo").unwrap(),
-            wasm: b"\0asm one".to_vec(),
+
+        let a = tokio::spawn({
+            let publish = publish.clone();
+            async move {
+                publish
+                    .execute(PublishRequest {
+                        function: FunctionId::new("echo").unwrap(),
+                        wasm: b"\0asm one".to_vec(),
+                        egress_allow: vec![],
+                    })
+                    .await
+            }
         });
-        let b = publish.execute(PublishRequest {
-            function: FunctionId::new("echo").unwrap(),
-            wasm: b"\0asm two".to_vec(),
-        });
-        let (ra, rb) = tokio::join!(a, b);
-        let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
-        let conflicts = [&ra, &rb]
-            .iter()
-            .filter(|r| matches!(r, Err(AppError::Conflict(_))))
-            .count();
-        assert_eq!(oks, 1, "ra={ra:?} rb={rb:?}");
-        assert_eq!(conflicts, 1, "ra={ra:?} rb={rb:?}");
-        assert_eq!(bus.events.lock().unwrap().len(), 1);
+        lock.first_acquired.notified().await;
+
+        let err = publish
+            .execute(PublishRequest {
+                function: FunctionId::new("echo").unwrap(),
+                wasm: b"\0asm two".to_vec(),
+                egress_allow: vec![],
+            })
+            .await
+            .expect_err("conflict while first still holds lock");
+        assert!(matches!(err, AppError::Conflict(_)), "{err}");
+
+        lock.allow_release.notify_one();
+        let ra = a.await.expect("join").expect("first publish");
+        assert_eq!(ra.status, PublishStatus::Ready);
     }
 }

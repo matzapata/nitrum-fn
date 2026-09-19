@@ -2,8 +2,8 @@
 //!
 //! | Group | Maps to |
 //! |---|---|
-//! | `publish` | store `.wasm` + enqueue (in-memory bus) |
-//! | `invoke/precompiled` | Invoke with in-memory `.cwasm` (deserialize each call) |
+//! | `publish` | validate wasm + store `.wasm` + catalog upsert |
+//! | `invoke/catalog` | `InvokeFunction` (catalog resolve + re-hash wasm + Cranelift) |
 //! | `invoke/cranelift` | `FunctionRunner::run` from raw `.wasm` |
 //!
 //! ```text
@@ -13,19 +13,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishBus, PublishLock};
+use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner, PublishLock};
 use application::AppError;
-use application::{CompileQueuedFunction, InvokeFunction, PublishFunction};
+use application::{InvokeFunction, PublishFunction};
 use async_trait::async_trait;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use domain::{
-    ContentHash, FunctionId, FunctionVersion, InvokeRequest, PublishQueuedEvent, PublishRequest,
-    VersionLabel,
+    ContentHash, FunctionId, FunctionVersion, InvokeRequest, PublishRequest, VersionLabel,
 };
 use executor::WasmtimeRunner;
 use runtime::{encode_request, Request as FnRequest};
 use tokio::runtime::Runtime;
-use tokio::sync::Mutex;
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
@@ -51,46 +49,15 @@ fn wire_payload() -> Vec<u8> {
     encode_request(&req).expect("encode wire request")
 }
 
-/// Records queued events; drain via `take` for the bench compile step.
-struct MemBus {
-    events: Mutex<Vec<PublishQueuedEvent>>,
-}
-
-impl MemBus {
-    fn new() -> Self {
-        Self {
-            events: Mutex::new(Vec::new()),
-        }
-    }
-
-    async fn take(&self) -> Vec<PublishQueuedEvent> {
-        std::mem::take(&mut *self.events.lock().await)
-    }
-}
-
-#[async_trait]
-impl PublishBus for MemBus {
-    async fn publish_queued(&self, event: &PublishQueuedEvent) -> Result<(), AppError> {
-        self.events.lock().await.push(event.clone());
-        Ok(())
-    }
-}
-
 struct MemArtifacts {
     wasm: StdMutex<HashMap<String, Vec<u8>>>,
-    compiled: StdMutex<HashMap<String, Vec<u8>>>,
 }
 
 impl MemArtifacts {
     fn new() -> Self {
         Self {
             wasm: StdMutex::new(HashMap::new()),
-            compiled: StdMutex::new(HashMap::new()),
         }
-    }
-
-    fn drop_compiled(&self, hash: &ContentHash) {
-        self.compiled.lock().unwrap().remove(&hash.to_hex());
     }
 }
 
@@ -106,29 +73,21 @@ impl ArtifactStore for MemArtifacts {
     }
 
     async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.wasm
+        let bytes = self
+            .wasm
             .lock()
             .unwrap()
             .get(&hash.to_hex())
             .cloned()
-            .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
-    }
-
-    async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
-        self.compiled
-            .lock()
-            .unwrap()
-            .insert(hash.to_hex(), compiled.to_vec());
-        Ok(())
-    }
-
-    async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-        self.compiled
-            .lock()
-            .unwrap()
-            .get(&hash.to_hex())
-            .cloned()
-            .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
+            .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))?;
+        let actual = ContentHash::from_bytes(&bytes);
+        if actual != *hash {
+            return Err(AppError::HashMismatch {
+                expected: hash.to_hex(),
+                actual: actual.to_hex(),
+            });
+        }
+        Ok(bytes)
     }
 }
 
@@ -152,6 +111,7 @@ impl FunctionCatalog for MemCatalog {
         label: &VersionLabel,
         hash: ContentHash,
         _queued_at_ms: u64,
+        _egress_allow: &[domain::EgressOrigin],
     ) -> Result<bool, AppError> {
         self.entries
             .lock()
@@ -176,6 +136,7 @@ impl FunctionCatalog for MemCatalog {
             id: id.clone(),
             label: label.clone(),
             content_hash: hash,
+            egress_allow: vec![],
         })
     }
 
@@ -205,9 +166,6 @@ impl PublishLock for NoopLock {
 struct BenchEnv {
     rt: Runtime,
     runner: Arc<WasmtimeRunner>,
-    bus: Arc<MemBus>,
-    artifacts: Arc<MemArtifacts>,
-    compile: Arc<CompileQueuedFunction>,
     publish: Arc<PublishFunction>,
     invoke: Arc<InvokeFunction>,
     wasm: Vec<u8>,
@@ -222,17 +180,11 @@ impl BenchEnv {
         let artifacts = Arc::new(MemArtifacts::new());
         let catalog = Arc::new(MemCatalog::new());
         let runner = Arc::new(WasmtimeRunner::new().expect("runner"));
-        let bus = Arc::new(MemBus::new());
-        let compile = Arc::new(CompileQueuedFunction::new(
-            catalog.clone() as Arc<dyn FunctionCatalog>,
-            artifacts.clone() as Arc<dyn ArtifactStore>,
-            runner.clone() as Arc<dyn FunctionRunner>,
-            Arc::new(NoopLock) as Arc<dyn PublishLock>,
-        ));
         let publish = Arc::new(PublishFunction::new(
             artifacts.clone() as Arc<dyn ArtifactStore>,
-            bus.clone() as Arc<dyn PublishBus>,
+            catalog.clone() as Arc<dyn FunctionCatalog>,
             Arc::new(NoopLock) as Arc<dyn PublishLock>,
+            runner.clone() as Arc<dyn FunctionRunner>,
         ));
         let invoke = Arc::new(InvokeFunction::new(
             catalog as Arc<dyn FunctionCatalog>,
@@ -247,18 +199,13 @@ impl BenchEnv {
             .block_on(publish.execute(PublishRequest {
                 function: function.clone(),
                 wasm: wasm.clone(),
+                egress_allow: vec![],
             }))
             .expect("seed publish");
-        for event in rt.block_on(bus.take()) {
-            rt.block_on(compile.execute(&event)).expect("seed compile");
-        }
 
         Self {
             rt,
             runner,
-            bus,
-            artifacts,
-            compile,
             publish,
             invoke,
             wasm,
@@ -283,33 +230,14 @@ fn host_path_benches(c: &mut Criterion) {
     {
         let mut g = c.benchmark_group("publish");
         g.sample_size(20);
-        g.bench_function("hello_world_store_and_enqueue", |b| {
+        g.bench_function("hello_world_validate_store_upsert", |b| {
             b.iter(|| {
                 let res = env.rt.block_on(env.publish.execute(PublishRequest {
                     function: env.function.clone(),
                     wasm: env.wasm.clone(),
+                    egress_allow: vec![],
                 }));
-                let _ = env.rt.block_on(env.bus.take());
                 black_box(res.expect("publish"));
-            });
-        });
-        g.finish();
-    }
-
-    {
-        let mut g = c.benchmark_group("compile");
-        g.sample_size(20);
-        g.bench_function("hello_world_aot", |b| {
-            b.iter(|| {
-                let event = PublishQueuedEvent::new(
-                    env.function.to_string(),
-                    env.hash.to_hex(),
-                    env.wasm.len(),
-                );
-                env.artifacts.drop_compiled(&env.hash);
-                let res = env.rt.block_on(env.compile.execute(&event));
-                res.expect("compile");
-                black_box(());
             });
         });
         g.finish();
@@ -319,12 +247,12 @@ fn host_path_benches(c: &mut Criterion) {
         let mut g = c.benchmark_group("invoke");
         g.sample_size(20);
 
-        g.bench_function("precompiled_hello_world", |b| {
+        g.bench_function("catalog_hello_world", |b| {
             b.iter(|| {
                 let res = env
                     .rt
                     .block_on(env.invoke.execute(env.invoke_req()))
-                    .expect("invoke precompiled");
+                    .expect("invoke");
                 black_box(res);
             });
         });
@@ -333,7 +261,7 @@ fn host_path_benches(c: &mut Criterion) {
             b.iter(|| {
                 let res = env
                     .rt
-                    .block_on(env.runner.run(&env.hash, &env.wasm, &env.payload))
+                    .block_on(env.runner.run(&env.hash, &env.wasm, &env.payload, &[]))
                     .expect("runner.run");
                 black_box(res);
             });

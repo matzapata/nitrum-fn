@@ -10,16 +10,8 @@ pub struct RunOutcome {
 
 #[async_trait]
 pub trait FunctionRunner: Send + Sync {
-    /// Validate + compile wasm, return serialized AOT bytes.
-    async fn compile(&self, hash: &ContentHash, wasm: &[u8]) -> Result<Vec<u8>, AppError>;
-
-    /// Deserialize a serialized module and run one invoke.
-    async fn run_precompiled(
-        &self,
-        hash: &ContentHash,
-        compiled: &[u8],
-        input: &[u8],
-    ) -> Result<RunOutcome, AppError>;
+    /// Validate guest wasm (parse + ABI) without instantiating.
+    async fn validate(&self, wasm: &[u8]) -> Result<(), AppError>;
 
     /// Compile from raw wasm and run one invoke.
     async fn run(
@@ -27,5 +19,6 @@ pub trait FunctionRunner: Send + Sync {
         hash: &ContentHash,
         wasm: &[u8],
         input: &[u8],
+        egress_allow: &[domain::EgressOrigin],
     ) -> Result<RunOutcome, AppError>;
 }

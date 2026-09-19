@@ -5,12 +5,13 @@ use application::ports::FunctionCatalog;
 use async_trait::async_trait;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::Client;
-use domain::{ContentHash, FunctionId, FunctionVersion, VersionLabel};
+use domain::{ContentHash, EgressOrigin, FunctionId, FunctionVersion, VersionLabel};
 
 const ATTR_FN_ID: &str = "fn_id";
 const ATTR_LABEL: &str = "label";
 const ATTR_HASH: &str = "content_hash";
 const ATTR_QUEUED_AT: &str = "queued_at_ms";
+const ATTR_EGRESS_ALLOW: &str = "egress_allow";
 
 /// Persists catalog rows as DynamoDB items: `fn_id` (hash) + `label` (range) → `content_hash`.
 pub struct DynamoDbFunctionCatalog {
@@ -35,9 +36,10 @@ impl FunctionCatalog for DynamoDbFunctionCatalog {
         label: &VersionLabel,
         hash: ContentHash,
         queued_at_ms: u64,
+        egress_allow: &[EgressOrigin],
     ) -> Result<bool, AppError> {
         let incoming = queued_at_ms.to_string();
-        let result = self
+        let mut req = self
             .client
             .put_item()
             .table_name(&self.table)
@@ -47,9 +49,15 @@ impl FunctionCatalog for DynamoDbFunctionCatalog {
             .item(ATTR_QUEUED_AT, AttributeValue::N(incoming.clone()))
             .condition_expression("attribute_not_exists(#q) OR #q <= :incoming")
             .expression_attribute_names("#q", ATTR_QUEUED_AT)
-            .expression_attribute_values(":incoming", AttributeValue::N(incoming))
-            .send()
-            .await;
+            .expression_attribute_values(":incoming", AttributeValue::N(incoming));
+        if !egress_allow.is_empty() {
+            let origins: Vec<String> = egress_allow
+                .iter()
+                .map(|o| o.as_str().to_string())
+                .collect();
+            req = req.item(ATTR_EGRESS_ALLOW, AttributeValue::Ss(origins));
+        }
+        let result = req.send().await;
 
         match result {
             Ok(_) => Ok(true),
@@ -125,9 +133,20 @@ fn version_from_item(item: &HashMap<String, AttributeValue>) -> Result<FunctionV
     let id = FunctionId::new(attr_s(item, ATTR_FN_ID)?).map_err(AppError::from)?;
     let label = VersionLabel::new(attr_s(item, ATTR_LABEL)?).map_err(AppError::from)?;
     let content_hash = ContentHash::from_hex(attr_s(item, ATTR_HASH)?).map_err(AppError::from)?;
+    let egress_allow = item
+        .get(ATTR_EGRESS_ALLOW)
+        .and_then(|v| v.as_ss().ok())
+        .map(|ss| {
+            ss.iter()
+                .map(|s| EgressOrigin::parse(s).map_err(AppError::from))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     Ok(FunctionVersion {
         id,
         label,
         content_hash,
+        egress_allow,
     })
 }

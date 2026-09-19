@@ -37,9 +37,9 @@ acme = false
 domain = "fn.localhost"
 
 [egress]
-# Whitelist when true. Implicit allows: KMS, SSM, DynamoDB, IMDS, OTLP.
-# S3 hostnames are listed in destinations below.
-enabled = true
+# Open egress; per-function HTTPS allowlists are enforced by the host import.
+# Implicit platform allows: KMS, SSM, DynamoDB, IMDS, OTLP. S3 is listed below.
+enabled = false
 destinations = [
   "s3\\.amazonaws\\.com$",
   "s3\\.[a-z0-9-]+\\.amazonaws\\.com$",

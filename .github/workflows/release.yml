@@ -1,0 +1,251 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  api:
+    name: Publish API
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      API_IMAGE: ghcr.io/${{ github.repository }}/api
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ github.ref_name }}
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Make API package public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          owner="${{ github.repository_owner }}"
+          name="${{ github.event.repository.name }}"
+          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
+            base="/orgs/${owner}/packages/container"
+          else
+            base="/user/packages/container"
+          fi
+          gh api --method PUT "${base}/${name}%2Fapi/visibility" -f visibility=public
+
+  host:
+    name: Publish host (image + EIF)
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HOST_IMAGE: ghcr.io/${{ github.repository }}/host
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Nitrum CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum/develop/scripts/install-nitrum.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build EIF
+        run: |
+          set -euo pipefail
+          nitrum build | tee /tmp/nitrum-build.txt
+      - name: Push host image
+        run: |
+          set -euo pipefail
+          name="$(sed -nE 's/^name = "([^"]+)"/\1/p' nitrum.toml | head -1)"
+          src="nitrum-${name}:latest"
+          docker image inspect "${src}" >/dev/null
+          docker tag "${src}" "${HOST_IMAGE}:latest"
+          docker tag "${src}" "${HOST_IMAGE}:${{ github.ref_name }}"
+          docker tag "${src}" "${HOST_IMAGE}:${{ github.sha }}"
+          docker push "${HOST_IMAGE}:latest"
+          docker push "${HOST_IMAGE}:${{ github.ref_name }}"
+          docker push "${HOST_IMAGE}:${{ github.sha }}"
+      - name: Write measurements
+        run: |
+          set -euo pipefail
+          hash="$(sed -nE 's/^EIF hash \(sha256\): //p' /tmp/nitrum-build.txt | tail -1)"
+          pcr0="$(sed -nE 's/^PCR0: //p' /tmp/nitrum-build.txt | tail -1)"
+          pcr1="$(sed -nE 's/^PCR1: //p' /tmp/nitrum-build.txt | tail -1)"
+          pcr2="$(sed -nE 's/^PCR2: //p' /tmp/nitrum-build.txt | tail -1)"
+          if [[ -z "${hash}" || -z "${pcr0}" ]]; then
+            echo "failed to parse nitrum build measurements" >&2
+            cat /tmp/nitrum-build.txt >&2
+            exit 1
+          fi
+          label="${hash:0:12}"
+          python3 - "${hash}" "${label}" "${pcr0}" "${pcr1}" "${pcr2}" <<'PY'
+          import json, sys
+          hash, label, pcr0, pcr1, pcr2 = sys.argv[1:6]
+          out = {
+              "tag": "${{ github.ref_name }}",
+              "git_sha": "${{ github.sha }}",
+              "host_image": "${{ env.HOST_IMAGE }}:${{ github.ref_name }}",
+              "eif_sha256": hash,
+              "eif_version_label": label,
+              "pcr0": pcr0,
+              "pcr1": pcr1,
+              "pcr2": pcr2,
+          }
+          with open(".nitrum/artifacts/nitrum-fn.eif.json", "w", encoding="utf-8") as f:
+              json.dump(out, f, indent=2)
+              f.write("\n")
+          PY
+          cat > .nitrum/artifacts/RELEASE.md <<EOF
+          ## Images
+
+          - \`ghcr.io/${{ github.repository }}/api:${{ github.ref_name }}\`
+          - \`ghcr.io/${{ github.repository }}/host:${{ github.ref_name }}\`
+
+          Pin \`api_image\` in \`terraform.tfvars\` to the tag (not \`:latest\`). Packages must be **public** so ECS can pull without a PAT.
+
+          ## Host
+
+          Download \`nitrum-fn.eif\` into \`.nitrum/artifacts/nitrum-fn.eif\`, then set:
+
+          \`\`\`hcl
+          enable_enclave    = true
+          eif_version_label = "${label}"
+          eif_image_sha384  = "${pcr0}"
+          api_image         = "ghcr.io/${{ github.repository }}/api:${{ github.ref_name }}"
+          \`\`\`
+
+          Rebuild locally with \`nitrum build\` only if you intend a new PCR0.
+
+          ## CLI
+
+          Install the \`nitrum-fn\` binary:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install-nitrum-fn.sh | bash
+          # pin: NITRUM_FN_VERSION=${{ github.ref_name }} bash …
+          \`\`\`
+
+          Release assets: \`nitrum-fn-linux-x86_64\`, \`nitrum-fn-darwin-aarch64\`, \`nitrum-fn-windows-x86_64.exe\`.
+          EOF
+      - name: Make host package public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          owner="${{ github.repository_owner }}"
+          name="${{ github.event.repository.name }}"
+          if [[ "${{ github.event.repository.owner.type }}" == "Organization" ]]; then
+            base="/orgs/${owner}/packages/container"
+          else
+            base="/user/packages/container"
+          fi
+          gh api --method PUT "${base}/${name}%2Fhost/visibility" -f visibility=public
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host
+          path: |
+            .nitrum/artifacts/nitrum-fn.eif
+            .nitrum/artifacts/nitrum-fn.eif.json
+            .nitrum/artifacts/RELEASE.md
+          if-no-files-found: error
+
+  cli:
+    name: Build CLI (${{ matrix.suffix }})
+    needs: [ci]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: darwin-aarch64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x86_64
+            ext: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
+      - name: Build CLI
+        run: cargo build --locked --release -p cli
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          src="target/release/nitrum-fn${{ matrix.ext }}"
+          dest="dist/nitrum-fn-${{ matrix.suffix }}${{ matrix.ext }}"
+          cp "$src" "$dest"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitrum-fn-cli-${{ matrix.suffix }}
+          path: dist/*
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub Release
+    needs: [api, host, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: host
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nitrum-fn-cli-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          body_path: dist/RELEASE.md
+          files: |
+            dist/nitrum-fn.eif
+            dist/nitrum-fn.eif.json
+            dist/nitrum-fn-linux-x86_64
+            dist/nitrum-fn-darwin-aarch64
+            dist/nitrum-fn-windows-x86_64.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

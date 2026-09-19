@@ -28,12 +28,7 @@ resource "aws_ecs_task_definition" "api" {
         }
       ]
       environment = [
-        { name = "NITRUM_FN_ENV", value = "prod" },
-        { name = "NITRUM_FN_ARTIFACTS__BUCKET", value = var.artifacts_bucket_name },
-        { name = "NITRUM_FN_CATALOG__TABLE", value = var.catalog_table_name },
-        { name = "NITRUM_FN_CATALOG__PUBLISH_LOCK_TABLE", value = var.publish_lock_table_name },
-        { name = "NITRUM_FN_PUBLISH__TOPIC_ARN", value = var.publish_topic_arn },
-        { name = "NITRUM_FN_SERVER__PORT", value = tostring(local.container_port) },
+        { name = "NITRUM_FN_ENV", value = var.run_env },
         { name = "AWS_REGION", value = data.aws_region.current.name },
         { name = "OTEL_SERVICE_NAME", value = "nitrum-fn-api" },
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" },

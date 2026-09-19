@@ -22,7 +22,7 @@ async fn ensure_bucket(client: &Client, bucket: &str) {
 }
 
 #[tokio::test]
-async fn put_get_wasm_and_cwasm() {
+async fn put_get_wasm() {
     let client = common::s3_client().await;
     let bucket = common::unique("nitrum-fn-artifacts");
     ensure_bucket(&client, &bucket).await;
@@ -31,16 +31,6 @@ async fn put_get_wasm_and_cwasm() {
     let wasm = b"\0asm\x01\x00\x00\x00fake";
     let hash = store.put(wasm).await.expect("put wasm");
     assert_eq!(store.get(&hash).await.expect("get wasm"), wasm);
-
-    let compiled = b"fake-cwasm";
-    store
-        .put_compiled(&hash, compiled)
-        .await
-        .expect("put cwasm");
-    assert_eq!(
-        store.get_compiled(&hash).await.expect("get cwasm"),
-        compiled
-    );
 }
 
 #[tokio::test]

@@ -23,6 +23,10 @@ pub enum AppError {
     #[error("artifact hash mismatch: expected {expected}, got {actual}")]
     HashMismatch { expected: String, actual: String },
 
+    /// Request header or other client input failed validation.
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
     /// Compile failed.
     #[error("compile failed: {0}")]
     Compile(String),
@@ -46,12 +50,19 @@ pub enum AppError {
     /// Request body, wasm artifact, or guest output exceeded a product limit.
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
+
+    /// Enclave attestation (NSM / crypto API) failed.
+    #[error("attestation: {0}")]
+    Attestation(String),
 }
 
 impl AppError {
     /// True for failures whose Display may include driver or guest details.
     pub fn is_internal(&self) -> bool {
-        matches!(self, Self::Invoke(_) | Self::Trap(_) | Self::Storage(_))
+        matches!(
+            self,
+            Self::Invoke(_) | Self::Trap(_) | Self::Storage(_) | Self::Attestation(_)
+        )
     }
 
     /// Stable client-facing message. Log [`Display`] separately.
@@ -78,6 +89,8 @@ mod tests {
     #[test]
     fn client_errors_keep_their_display() {
         let err = AppError::NotFound("echo@latest".into());
+        assert_eq!(err.public_message(), err.to_string());
+        let err = AppError::BadRequest("invalid x-nitrum-fn-nonce (base64)".into());
         assert_eq!(err.public_message(), err.to_string());
     }
 }

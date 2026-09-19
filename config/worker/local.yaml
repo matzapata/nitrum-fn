@@ -1,3 +1,0 @@
-compile:
-  queue_url: http://127.0.0.1:4566/000000000000/nitrum-fn-compile
-  endpoint: http://127.0.0.1:4566

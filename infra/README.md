@@ -2,22 +2,21 @@
 
 Contributor workflow (local checks, images, staging e2e): [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-Staging deploys **network + store + API + publish-worker** by default. The Nitro enclave fleet is optional (`enable_enclave`) so you can publish functions before you have an EIF.
+Staging deploys **network + store + API** by default. The Nitro enclave fleet is optional (`enable_enclave`) so you can publish functions before you have an EIF.
 
 ```text
 infra/
   modules/
-    network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs/SQS/SNS endpoints
-    store/     # EIF S3, artifacts S3, catalog DDB, SNS+SQS, /env SSM
+    network/   # VPC, subnets, NAT, S3/DDB/KMS/SSM/Logs endpoints
+    store/     # EIF S3, artifacts S3, catalog DDB, /env SSM
     api/       # HTTP ALB, Fargate (ALB DNS)
-    worker/    # Fargate publish-worker (SQS → AOT)
     enclave/   # NLB, ASG, KMS, Nitrum data-plane table (optional)
   envs/staging/
 ```
 
-TLS for **invoke** terminates in the enclave (NLB TCP passthrough, self-signed with `acme = false`). **Publish** is HTTP to the API ALB DNS (`.wasm` upload + SNS enqueue; AOT is the publish-worker).
+TLS for **invoke** terminates in the enclave (NLB TCP passthrough, self-signed with `acme = false`). **Publish** is HTTP to the API ALB DNS (validate + store `.wasm` + upsert catalog in one request).
 
-`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**. The `Environment = staging` tag on this env is only for AWS resource tags.
+`project_name` must equal `[project].name` in `nitrum.toml` (`nitrum-fn`). The data-plane reads `/nitrum/{name}/env/` and `/nitrum/{name}/data-plane/` from that baked-in name. Staging vs prod is a **different AWS account**. Config overlays differ: staging uses `NITRUM_FN_ENV=staging` (`config/shared/staging.yaml`); a future prod env uses `prod`. The `Environment = staging` tag on this env is only for AWS resource tags.
 
 ## Prerequisites (once per account)
 
@@ -42,9 +41,9 @@ cp backend.hcl.example backend.hcl
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-## 1. Network + store + API + worker (no enclaves)
+## 1. Network + store + API (no enclaves)
 
-Fargate pulls **public** images. Defaults are GHCR (`ghcr.io/matzapata/nitrum-fn/api:latest` and `…/publish-worker:latest`), published by CI on `main`. Override `api_image` / `worker_image` in `terraform.tfvars` for Docker Hub or another registry. Make GHCR packages public so ECS can pull without a PAT.
+Fargate pulls **public** images. Defaults are GHCR (`ghcr.io/matzapata/nitrum-fn/api:latest`), published by the [Release workflow](../.github/workflows/release.yml) on `v*` tags. Override `api_image` in `terraform.tfvars` for Docker Hub or another registry. Make GHCR packages public so ECS can pull without a PAT. Pin to the release tag (not `:latest`) when you want a specific cut.
 
 ```bash
 cd infra/envs/staging
@@ -53,9 +52,9 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-Outputs you need: `api_url`, `api_image`, `worker_image`, `eif_bucket_name`, `artifacts_bucket_name`.
+Outputs you need: `api_url`, `api_image`, `eif_bucket_name`, `artifacts_bucket_name`. With enclaves: `invoke_url`, `pcr0`.
 
-Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Deploy (CLI polls until the worker upserts the catalog):
+Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Deploy:
 
 ```bash
 cargo run -p cli -- deploy ./path/to/fn.wasm --name hello-world --url "$(terraform -chdir=infra/envs/staging output -raw api_url)"
@@ -83,7 +82,9 @@ eif_image_sha384  = "<PCR0 hex>"
 
 3. `terraform apply` — uploads `.nitrum/artifacts/nitrum-fn.eif` to the EIF bucket, then creates NLB, ASG, KMS (PCR0-conditioned), Nitrum data-plane table, and read IAM on the instance role for catalog/artifacts. The ASG waits for the object to exist.
 
-SSM under `/nitrum/<project>/env/` already has `NITRUM_FN_ENV=prod`, `NITRUM_FN_ARTIFACTS__BUCKET`, and `NITRUM_FN_CATALOG__TABLE` so Nitrum can inject them into the enclave. Publish (SNS/SQS, lock table) stays on the Fargate API.
+SSM under `/nitrum/<project>/env/` injects `AWS_REGION` and `NITRUM_FN_ENV` so the host SDK and config overlay work after the data-plane clears env. Artifacts bucket, catalog table, and publish-lock table names are literals in `config/shared/{staging,prod}.yaml`; Terraform `yamldecode`s that file to create them, and services read the same values from baked YAML. Port and prefix live in `config/*.yaml`.
+
+**Bucket rename:** changing `artifacts.bucket` in YAML forces S3 replace (name is immutable). With `retain = false` the old bucket is destroyed — republish functions after apply.
 
 Invoke (`curl -k` with the self-signed enclave cert):
 
@@ -95,14 +96,12 @@ curl -k -X POST "$(terraform -chdir=infra/envs/staging output -raw invoke_url)/i
 Or run the cloud e2e (publish via ALB, invoke via NLB):
 
 ```bash
-export NITRUM_FN_API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
-export NITRUM_FN_INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw invoke_url)"
-bash tests/e2e/cloud.sh
+./tests/e2e/cloud.sh
 ```
 
 ## Every enclave release
 
-`nitrum build`, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. Terraform re-uploads the EIF; the launch template name changes and the ASG rolls.
+Prefer the EIF attached to the GitHub Release (`nitrum-fn.eif` + `nitrum-fn.eif.json`). Copy it to `.nitrum/artifacts/nitrum-fn.eif`, bump **both** `eif_version_label` and `eif_image_sha384`, `terraform apply`. Terraform re-uploads the EIF; the launch template name changes and the ASG rolls. `nitrum build` locally only when you want a new PCR0.
 
 ## Layout vs trust
 

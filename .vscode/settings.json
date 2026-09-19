@@ -1,0 +1,13 @@
+{
+  "solidity.monoRepoSupport": true,
+  "solidity.packageDefaultDependenciesDirectory": [
+    "examples/oracle/contracts/lib",
+    "lib",
+    "node_modules"
+  ],
+  "solidity.packageDefaultDependenciesContractsDirectory": ["src", "contracts", ""],
+  "solidity.remappings": [
+    "forge-std/=examples/oracle/contracts/lib/forge-std/src/",
+    "@nitro-validator/=examples/oracle/contracts/lib/nitro-validator/src/"
+  ]
+}
