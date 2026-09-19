@@ -1,5 +1,5 @@
-.PHONY: lint format fmt-check check audit test adapters e2e e2e-cloud ci \
-	stack stack-down images api host oracle-contracts
+.PHONY: lint format fmt-check check audit test adapters ci \
+	stack stack-down images api host
 
 # Override the registry/tag per target, e.g.:
 #   make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=sha-1234
@@ -26,7 +26,7 @@ audit:
 test:
 	cargo test --workspace --lib --bins
 
-adapters:
+test-adapters:
 	docker compose up -d --remove-orphans floci
 	NITRUM_FN_ARTIFACTS__ENDPOINT=http://127.0.0.1:4566 \
 	NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:4566 \
@@ -34,16 +34,8 @@ adapters:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
 		cargo test --tests -p catalog -p artifacts
 
-e2e:
+ci: check audit test adapters
 	bash tests/e2e/local.sh
-
-e2e-cloud:
-	./tests/e2e/cloud.sh
-
-oracle-contracts:
-	cd examples/oracle/contracts && forge test
-
-ci: check audit test adapters e2e
 
 stack:
 	docker compose up -d --remove-orphans floci

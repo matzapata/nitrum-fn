@@ -22,10 +22,17 @@ nitrum-fn invoke echo -d '{}' --fn-shasum "$HASH"  # host
 
 ## Write a function
 
-Guest crate (see `examples/hello-world`):
+Scaffold a guest crate:
+
+```bash
+nitrum-fn new              # ./hello-world
+nitrum-fn new my-fn        # ./my-fn
+```
+
+That writes a hello-world project from [`crates/cli/template`](../crates/cli/template) (git `runtime` dependency). The Cargo package name stays `hello-world`, so the release artifact is always `hello_world.wasm`. `NAME` is only the directory (and the suggested deploy `--name`).
 
 ```toml
-# Cargo.toml — in this repo, path-dep the workspace runtime (see examples/hello-world).
+# Cargo.toml — customer scaffold from `nitrum-fn new`
 [package]
 name = "hello-world"
 edition = "2021"
@@ -35,7 +42,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-runtime = { path = "../../crates/runtime" }
+runtime = { git = "https://github.com/matzapata/nitrum-fn", package = "runtime", branch = "main" }
 serde_json = "1"
 
 [profile.release]
@@ -45,6 +52,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 ```
+
+In-repo demos under `examples/hello-world` and `examples/oracle/enclave` path-dep `crates/runtime` instead; they are not what `nitrum-fn new` copies.
 
 ```rust
 use runtime::{Error, Request};
@@ -203,7 +212,7 @@ API_URL="$(terraform -chdir=infra/envs/staging output -raw api_url)"
 cargo run -p cli -- deploy ./hello_world.wasm --name hello-world --url "$API_URL"
 ```
 
-`hello-world` helper: `bash examples/hello-world/deploy-local.sh`.
+`hello-world` helper: `./examples/hello-world/e2e.sh` (API + host must already be running).
 
 Ready means the API validated, stored, and upserted the catalog before responding. The host still loads and Cranelift-compiles that `.wasm` on invoke (module cache after the first call on that host).
 
@@ -242,7 +251,7 @@ Staging enclave (self-signed cert until ACME is on):
 
 ```bash
 INVOKE_URL="$(terraform -chdir=infra/envs/staging output -raw invoke_url)"
-export NITRUM_FN_PCR0="<48-byte PCR0 hex from nitrum build / eif.json>"
+export NITRUM_FN_PCR0="$(terraform -chdir=infra/envs/staging output -raw pcr0)"
 
 cargo run -p cli -- invoke hello-world \
   --url "$INVOKE_URL" --insecure \
@@ -302,7 +311,7 @@ Trust is not a Nitrum public key. A Solidity consumer checks AWS Nitro PKI ([`ba
 
 On-chain, PCR0 is stored as `keccak256(raw 48-byte PCR0)`. Content hash is the 32-byte sha256 — **do not call this PCR1** (AWS PCR1 is a different measurement).
 
-Worked example: `examples/oracle` (CoinGecko guest + `NitrumOracle` on Base Sepolia). Demo: [`docs/assets/oracle-demo.mp4`](assets/oracle-demo.mp4).
+Worked example: `examples/oracle` (CoinGecko guest + `NitrumOracle` on Base Sepolia). Automated staging demo: [`examples/oracle/e2e.sh`](../examples/oracle/e2e.sh). Walkthrough: [`docs/assets/oracle-demo.mp4`](assets/oracle-demo.mp4).
 
 ### 1. Guest body the contract can rebuild
 
@@ -386,19 +395,27 @@ First time a leaf appears, cache the cabundle (`CacheCerts`). Warm path is signa
 export ATTESTATION_HEX=0x$(xxd -p -c 256 attestation.bin | tr -d '\n')
 export BODY_HEX=0x$(printf '%s' '{"ids":["eth"],"prices":[...]}' | xxd -p -c 256 | tr -d '\n')
 
-# cold: cabundle + leaf (under-estimated gas on public RPCs)
-forge script script/UpdatePrices.s.sol:CacheCerts \
-  --rpc-url "$BASE_SEPOLIA_RPC_URL" --broadcast --ffi --offline \
-  --gas-estimate-multiplier 200
+# cold: cabundle + leaf (skip already-cached CAs; send with a hard gas cap)
+forge script script/UpdatePrices.s.sol:CacheCerts --ffi \
+  --rpc-url "$BASE_SEPOLIA_RPC_URL"
+i=0
+while [[ -f cacheCerts.$i.data ]]; do
+  cast send "$(cat cacheCerts.to)" "$(cat cacheCerts.$i.data)" \
+    --rpc-url "$BASE_SEPOLIA_RPC_URL" --private-key "$PRIVATE_KEY" \
+    --gas-limit 16000000
+  i=$((i + 1))
+done
 
 # warm: write calldata, then send with a hard gas cap
-forge script script/UpdatePrices.s.sol:UpdatePrices --ffi --offline
+# --rpc-url is required: the script reads oracle.validator() and the cached leaf.
+forge script script/UpdatePrices.s.sol:UpdatePrices --ffi \
+  --rpc-url "$BASE_SEPOLIA_RPC_URL"
 cast send "$ORACLE_ADDRESS" "$(cat updatePrice.data)" \
   --rpc-url "$BASE_SEPOLIA_RPC_URL" --private-key "$PRIVATE_KEY" \
   --gas-limit 16000000
 ```
 
-`--ffi` needs Node (`p384_hints.js`). `--offline` avoids Sourcify hangs. Prefer a dedicated Base Sepolia RPC; public endpoints often reject ~16M-gas txs. Do not broadcast `updatePrice` through Foundry — local `modexp` metering exceeds typical caps.
+`--ffi` needs Node (`p384_hints.js`). `UpdatePrices` must pass `--rpc-url` so it can read `oracle.validator()` and the cached leaf; `--offline` here simulates an empty chain and looks like a missing contract. Prefer a dedicated Base Sepolia RPC; public endpoints often reject ~16M-gas txs. Do not broadcast `updatePrice` through Foundry — local `modexp` metering exceeds typical caps.
 
 ### 6. Read
 
@@ -422,6 +439,7 @@ Full operator notes: [`examples/oracle/README.md`](../examples/oracle/README.md)
 
 ```bash
 nitrum-fn --help
+nitrum-fn new --help
 nitrum-fn deploy --help
 nitrum-fn invoke --help
 
@@ -439,8 +457,8 @@ cargo run -p cli -- --help
 
 | Path | What |
 | --- | --- |
-| `examples/hello-world` | JSON `{"message":"Hello, world!"}`, no egress |
+| `examples/hello-world` | JSON `{"message":"Hello, world!"}`, no egress; `e2e.sh` |
 | `examples/oracle/enclave` | Allowlisted CoinGecko GET, canonical body |
 | `examples/oracle/contracts` | Foundry consumer of the attested body |
 
-Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `make e2e` / `./tests/e2e/cloud.sh`.
+Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `bash tests/e2e/local.sh` / `./tests/e2e/cloud.sh`.

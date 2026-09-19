@@ -43,6 +43,11 @@ output "invoke_url" {
   value       = var.enable_enclave ? "https://${module.enclave[0].nlb_dns_name}" : null
 }
 
+output "pcr0" {
+  description = "Enclave PCR0 (eif_image_sha384). Null when enable_enclave is false."
+  value       = var.enable_enclave ? var.eif_image_sha384 : null
+}
+
 output "eif_s3_uri" {
   description = "S3 URI the control-plane downloads at startup (null when enable_enclave is false)"
   value       = var.enable_enclave ? module.enclave[0].eif_s3_uri : null

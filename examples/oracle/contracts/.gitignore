@@ -7,3 +7,5 @@ body.json
 invoke.stderr
 attestation.bin
 updatePrice.data
+cacheCerts.to
+cacheCerts.*.data

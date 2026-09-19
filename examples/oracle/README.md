@@ -8,8 +8,20 @@ Demo (deploy function → invoke → `updatePrice` → `getPrice`):
 
 <video src="../../docs/assets/oracle-demo.mp4" controls width="100%"></video>
 
+Automated (staging enclave + a NitrumOracle already on Base Sepolia):
+
+```bash
+# .env: PRIVATE_KEY, BASE_SEPOLIA_RPC_URL, ORACLE_ADDRESS
+# optional NITRUM_FN_API_URL / NITRUM_FN_INVOKE_URL / NITRUM_FN_PCR0 (else terraform outputs)
+set -a && source .env && set +a
+./examples/oracle/e2e.sh
+```
+
+That is: deploy wasm → `setEnclave` → invoke / submit / `getPrice`, twice (cold leaf, then warm).
+
 ```
 examples/oracle/
+  e2e.sh         # staging demo: deploy → setEnclave → invoke/submit/read × 2
   enclave/       # CoinGecko guest (.wasm) — canonical JSON body
   contracts/     # Foundry: NitrumOracle, Deploy, SetEnclave, UpdatePrices
 ```
@@ -72,11 +84,8 @@ Local invoke has **no** Nitro document (`NoopAttestor`). On-chain submit needs *
 ## 1. Deploy contracts (Base Sepolia, once)
 
 ```bash
+set -a && source .env && set +a
 cd examples/oracle/contracts
-
-export PRIVATE_KEY=0x…
-export BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$BASE_SEPOLIA_RPC_URL" \
   --broadcast
@@ -97,7 +106,7 @@ Then pin PCR0 + content hash on-chain. The Foundry script takes hashes only:
 
 ```bash
 export ORACLE_ADDRESS=0xDFFad5fe3eC475ee9F9240B3913a4002df44417E
-export PCR0=0xf61799704497e58c596462482427d58dc5a39fbf1f807980fce98969c58f66820e9ae0e926f8b2d43594e3446ca42199
+export PCR0=0x56b299278a1309315ce2c4488e9de5f0b3da36a4471b17f267b5a242d08712623c29ac1cf59c979e1e7c68421a0271e1
 export CONTENT_HASH="0x$HASH"
 
 cd examples/oracle/contracts
@@ -118,16 +127,16 @@ oracle.setEnclave(pcr0Hash, contentHash);
 
 ## 3–5. Deploy function → invoke → on-chain → read
 
-The [demo video](../../docs/assets/oracle-demo.mp4) walks through `cli deploy`, invoke, on-chain submit, and `getPrice`.
+Prefer `./examples/oracle/e2e.sh` (deploy → `setEnclave` → invoke/submit/read × 2). The [demo video](../../docs/assets/oracle-demo.mp4) walks through the same steps by hand.
 
 Reference notes:
 
 - Staging only for Nitro documents — local host uses `NoopAttestor`.
 - Invoke with `--attestation-out FILE` to write the verified COSE Sign1 bytes (do not grep stderr).
 - Strip trailing newlines when building `BODY_HEX` or you get `BodyHashMismatch`.
-- `updatePrice` needs Node.js + `--ffi` (P-384 hints) and `--offline` (avoid Sourcify hangs).
+- `updatePrice` needs Node.js + `--ffi` (P-384 hints). `UpdatePrices` also needs `--rpc-url` to read `oracle.validator()` / CertManager; `--offline` without an RPC looks like a missing contract.
 - Prefer a dedicated Base Sepolia RPC; public endpoints often reject ~16M-gas txs.
-- First leaf: `CacheCerts` with `--gas-estimate-multiplier 200`. Re-takes: skip it; `forge script UpdatePrices --ffi` then `cast send --gas-limit 16000000` (do not broadcast `updatePrice` through Foundry — local `modexp` exceeds Alchemy's 16M cap).
+- First leaf: `CacheCerts` writes `cacheCerts.N.data` (skips cached CAs); `cast send --gas-limit 16000000`. Do not `forge script --broadcast` those txs — a cached CA is cheap execution + huge calldata, so the gas limit falls below Base Sepolia's EIP-7623 floor. Re-takes: skip CacheCerts; `forge script UpdatePrices --ffi --rpc-url $BASE_SEPOLIA_RPC_URL` then `cast send --gas-limit 16000000` (do not broadcast `updatePrice` through Foundry — local `modexp` exceeds Alchemy's 16M cap).
 - `getPrice` values are USD × 1e8 (`350012000000` → $3500.12).
 
 ## How Nitro PKI verification works

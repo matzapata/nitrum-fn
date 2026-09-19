@@ -1,7 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["examples/hello-world", "examples/oracle/enclave"]
+exclude = [
+    "examples/hello-world",
+    "examples/oracle/enclave",
+    "target/nitrum-fn-e2e-workspace",
+]
 
 [workspace.package]
 edition = "2021"

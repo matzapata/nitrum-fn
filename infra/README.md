@@ -52,7 +52,7 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
-Outputs you need: `api_url`, `api_image`, `eif_bucket_name`, `artifacts_bucket_name`.
+Outputs you need: `api_url`, `api_image`, `eif_bucket_name`, `artifacts_bucket_name`. With enclaves: `invoke_url`, `pcr0`.
 
 Wait until `http://<alb_dns>/healthz` returns 200 (`terraform output -raw api_url`). Deploy:
 

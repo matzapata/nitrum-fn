@@ -3,13 +3,15 @@
 - `echo.wat` / `echo.wasm` — minimal v0 ABI (memory + invoke echo; unit tests)
 - `hello_world.wasm` — release build of `examples/hello-world` (host-path benches)
 
+Platform e2e (`tests/e2e/local.sh`, `tests/e2e/cloud.sh`) scaffolds via `nitrum-fn new` and builds wasm from source; it does not use this fixture.
+
 Regenerate `echo.wasm` after editing `echo.wat`:
 
 ```bash
 wat2wasm tests/fixtures/echo.wat -o tests/fixtures/echo.wasm
 ```
 
-Refresh `hello_world.wasm` after changing the example:
+Refresh `hello_world.wasm` after changing the example (for benches):
 
 ```bash
 cargo build --manifest-path examples/hello-world/Cargo.toml \

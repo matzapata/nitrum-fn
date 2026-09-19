@@ -148,6 +148,7 @@ Talks to the API and the host. It never runs wasm.
 
 | Command    | Role                                                               |
 | ---------- | ------------------------------------------------------------------ |
+| `new`      | Scaffold a hello-world guest crate from `crates/cli/template`      |
 | `deploy`   | `PUT` the `.wasm`         |
 | `describe` | sha256 of a local `.wasm` (same value as `x-nitrum-fn-shasum`)     |
 | `invoke`   | `POST /invoke/{name}`; optional hash pin, PCR0, attestation verify |

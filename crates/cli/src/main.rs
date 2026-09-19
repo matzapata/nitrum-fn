@@ -1,11 +1,11 @@
 use clap::Parser;
-use cli::commands::{deploy, describe, invoke};
+use cli::commands::{deploy, describe, invoke, new};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "nitrum-fn")]
 #[command(
-    about = "Deploy, invoke, and describe WASM functions on nitrum-fn",
+    about = "Scaffold, deploy, invoke, and describe WASM functions on nitrum-fn",
     long_about = None
 )]
 struct Cli {
@@ -15,6 +15,8 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
+    /// Scaffold a hello-world function project
+    New(new::NewArgs),
     /// Deploy a WASM function
     Deploy(deploy::DeployArgs),
     /// Print sha256 of a local `.wasm` (same as `x-nitrum-fn-shasum` / `--fn-shasum`)
@@ -30,6 +32,7 @@ async fn main() {
 
     let cli = Cli::parse();
     let result = match cli.command {
+        Commands::New(args) => new::run(args).await,
         Commands::Deploy(args) => deploy::run(args).await,
         Commands::Describe(args) => describe::run(args).await,
         Commands::Invoke(args) => invoke::run(args).await,
@@ -46,6 +49,28 @@ mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
     use std::path::PathBuf;
+
+    #[test]
+    fn parses_new_default_name() {
+        let cli = Cli::try_parse_from(["nitrum-fn", "new"]).expect("parse");
+        match cli.command {
+            Commands::New(args) => {
+                assert_eq!(args.name, "hello-world");
+            }
+            _ => panic!("expected new"),
+        }
+    }
+
+    #[test]
+    fn parses_new_custom_name() {
+        let cli = Cli::try_parse_from(["nitrum-fn", "new", "my-fn"]).expect("parse");
+        match cli.command {
+            Commands::New(args) => {
+                assert_eq!(args.name, "my-fn");
+            }
+            _ => panic!("expected new"),
+        }
+    }
 
     #[test]
     fn parses_deploy() {

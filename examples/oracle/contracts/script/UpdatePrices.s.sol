@@ -49,10 +49,12 @@ abstract contract AttestationSubmitBase is Script {
             require(body.length > 0, "set BODY_HEX");
         }
 
+        console2.log("parsing attestation");
         NitroValidatorScriptParser parser = new NitroValidatorScriptParser();
         (loaded.attestationTbs, loaded.signature) = parser.decodeAttestationTbs(loaded.attestation);
         loaded.ptrs = parser.parseAttestation(loaded.attestationTbs);
 
+        console2.log("reading CertManager");
         NitroValidator nv = NitroValidator(address(loaded.oracle.validator()));
         loaded.certManager = CertManager(address(nv.certManager()));
 
@@ -64,24 +66,76 @@ abstract contract AttestationSubmitBase is Script {
         console2.log("cabundle certs", loaded.ptrs.cabundle.length);
     }
 
-    function _runColdHintedCache(Loaded memory loaded) internal returns (ICertManager.VerifiedCert memory leaf) {
+    function _cached(CertManager certManager, bytes memory cert)
+        internal
+        view
+        returns (ICertManager.VerifiedCert memory)
+    {
+        return certManager.loadVerified(_certCacheKey(cert));
+    }
+
+    function _writeCacheTx(uint256 i, bytes memory data) internal {
+        vm.writeFile(string.concat("cacheCerts.", vm.toString(i), ".data"), vm.toString(data));
+    }
+
+    /// @dev Writes `cacheCerts.N.data` for uncached cabundle + leaf. Parent keys for the next
+    ///      cert come from `loadVerified` (already cached) or the cert SPKI — never from simulating
+    ///      `verify*WithHints` on the fork (Foundry MODEXP hangs for minutes). Does not broadcast:
+    ///      cached-CA txs are cheap execution + huge calldata, so Foundry's gas limit falls below
+    ///      the EIP-7623 floor.
+    function _dumpColdCache(Loaded memory loaded) internal returns (uint256 n) {
+        vm.writeFile("cacheCerts.to", vm.toString(address(loaded.certManager)));
+
+        bytes memory clientCert = loaded.attestationTbs.slice(loaded.ptrs.cert);
+        if (_cached(loaded.certManager, clientCert).pubKey.length > 0) {
+            console2.log("leaf already cached");
+            return 0;
+        }
+
         bytes memory rootCert = loaded.attestationTbs.slice(loaded.ptrs.cabundle[0]);
         bytes32 parentHash = keccak256(rootCert);
-        ICertManager.VerifiedCert memory parent = loaded.certManager.loadVerified(parentHash);
-        require(parent.pubKey.length > 0, "root not pinned");
+        bytes memory parentPubKey = loaded.certManager.loadVerified(parentHash).pubKey;
+        require(parentPubKey.length > 0, "root not pinned");
 
         for (uint256 i = 1; i < loaded.ptrs.cabundle.length; ++i) {
             bytes memory caCert = loaded.attestationTbs.slice(loaded.ptrs.cabundle[i]);
-            bytes memory hints = _certHints(caCert, parent.pubKey);
-            parentHash = loaded.certManager.verifyCACertWithHints(caCert, parentHash, hints);
-            parent = loaded.certManager.loadVerified(parentHash);
-            require(parent.pubKey.length > 0, "CA not cached");
+            ICertManager.VerifiedCert memory cached = _cached(loaded.certManager, caCert);
+            if (cached.pubKey.length > 0) {
+                parentHash = _certCacheKey(caCert);
+                parentPubKey = cached.pubKey;
+                console2.log("skip cached CA", i);
+                continue;
+            }
+            console2.log("P-384 hints for CA", i);
+            bytes memory hints = _certHints(caCert, parentPubKey);
+            _writeCacheTx(n++, abi.encodeCall(CertManager.verifyCACertWithHints, (caCert, parentHash, hints)));
+            parentHash = _certCacheKey(caCert);
+            parentPubKey = _certSubjectPubKey(caCert);
         }
 
-        bytes memory clientCert = loaded.attestationTbs.slice(loaded.ptrs.cert);
-        bytes memory clientHints = _certHints(clientCert, parent.pubKey);
-        leaf = loaded.certManager.verifyClientCertWithHints(clientCert, parentHash, clientHints);
-        require(leaf.pubKey.length > 0, "leaf not cached");
+        console2.log("P-384 hints for leaf");
+        bytes memory clientHints = _certHints(clientCert, parentPubKey);
+        _writeCacheTx(
+            n++, abi.encodeCall(CertManager.verifyClientCertWithHints, (clientCert, parentHash, clientHints))
+        );
+    }
+
+    /// @dev Uncompressed P-384 subject key (96 bytes) from X.509 SPKI. Same layout as
+    ///      CertManager._parsePubKey — ASN.1 only, no signature verify.
+    function _certSubjectPubKey(bytes memory certificate) internal pure returns (bytes memory) {
+        Asn1Ptr ptr = certificate.firstChildOf(certificate.root()); // TBS
+        ptr = certificate.firstChildOf(ptr); // version
+        ptr = certificate.nextSiblingOf(ptr); // serial
+        ptr = certificate.nextSiblingOf(ptr); // sigAlgo
+        ptr = certificate.nextSiblingOf(ptr); // issuer
+        ptr = certificate.nextSiblingOf(ptr); // validity
+        ptr = certificate.nextSiblingOf(ptr); // subject
+        ptr = certificate.nextSiblingOf(ptr); // SPKI
+        ptr = certificate.nextSiblingOf(certificate.firstChildOf(ptr)); // BIT STRING
+        ptr = certificate.bitstring(ptr);
+        uint256 start = ptr.content();
+        require(ptr.length() == 97 && certificate[start] == 0x04, "bad cert pubkey");
+        return certificate.slice(start + 1, 96);
     }
 
     function _loadCachedLeaf(Loaded memory loaded) internal view returns (ICertManager.VerifiedCert memory leaf) {
@@ -121,32 +175,31 @@ abstract contract AttestationSubmitBase is Script {
     }
 }
 
-/// @notice First leaf for this enclave: cache cabundle + client cert.
+/// @notice First leaf for this enclave: dump cabundle + client cert calldata (no local P-384).
 ///
-/// Alchemy under-estimates these txs; use `--gas-estimate-multiplier 200`.
-/// Skip on a re-take when the leaf is already cached.
+/// Do **not** `forge script --broadcast` these. A cached CA is a no-op with ~28KB calldata;
+/// local gas then sits under Base Sepolia's EIP-7623 floor (`intrinsic gas too low`).
+/// Send each `cacheCerts.N.data` with `cast send --gas-limit 16000000`, same as `updatePrice`.
 ///
-///   forge script script/UpdatePrices.s.sol:CacheCerts \
-///     --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast --ffi --offline \
-///     --gas-estimate-multiplier 200
+///   forge script script/UpdatePrices.s.sol:CacheCerts --ffi --rpc-url $BASE_SEPOLIA_RPC_URL
+///   cast send $(cat cacheCerts.to) $(cat cacheCerts.0.data) \
+///     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --gas-limit 16000000
 contract CacheCerts is AttestationSubmitBase {
     function run() external {
-        uint256 pk = vm.envUint("PRIVATE_KEY");
         (Loaded memory loaded,) = _load(false);
-
-        vm.startBroadcast(pk);
-        _runColdHintedCache(loaded);
-        console2.log("cert cold path done");
-        vm.stopBroadcast();
+        uint256 n = _dumpColdCache(loaded);
+        console2.log("wrote cacheCerts.*.data count", n);
     }
 }
 
 /// @notice Warm `updatePrice` after the leaf is cached.
 ///
-/// Does **not** call the oracle in Foundry's EVM — local `modexp` metering exceeds
-/// Alchemy's 16M cap. Writes `updatePrice.data` for `cast send --gas-limit 16000000`.
+/// Does **not** broadcast `updatePrice` — local `modexp` metering exceeds Alchemy's
+/// 16M cap. Still needs `--rpc-url` to read `oracle.validator()` and the cached leaf.
+/// Writes `updatePrice.data` for `cast send --gas-limit 16000000`.
 ///
-///   forge script script/UpdatePrices.s.sol:UpdatePrices --ffi --offline
+///   forge script script/UpdatePrices.s.sol:UpdatePrices --ffi \
+///     --rpc-url $BASE_SEPOLIA_RPC_URL
 ///   cast send $ORACLE_ADDRESS $(cat updatePrice.data) \
 ///     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --gas-limit 16000000
 contract UpdatePrices is AttestationSubmitBase {
@@ -154,6 +207,7 @@ contract UpdatePrices is AttestationSubmitBase {
         (Loaded memory loaded, bytes memory body) = _load(true);
 
         ICertManager.VerifiedCert memory leaf = _loadCachedLeaf(loaded);
+        console2.log("P-384 hints for attestation");
         bytes memory hints = _attestationHints(loaded.attestation, leaf.pubKey);
         bytes memory data =
             abi.encodeCall(NitrumOracle.updatePrice, (loaded.attestationTbs, loaded.signature, hints, body));
