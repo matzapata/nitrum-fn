@@ -1,0 +1,7 @@
+artifacts:
+  bucket: nitrum-fn-artifacts-staging
+  endpoint: null
+catalog:
+  table: nitrum-fn-fn-catalog
+  publish_lock_table: nitrum-fn-fn-publish-lock
+  endpoint: null

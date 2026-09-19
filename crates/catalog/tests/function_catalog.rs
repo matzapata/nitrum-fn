@@ -9,7 +9,7 @@ use aws_sdk_dynamodb::types::{
 };
 use aws_sdk_dynamodb::Client;
 use catalog::DynamoDbFunctionCatalog;
-use domain::{ContentHash, FunctionId, VersionLabel};
+use domain::{ContentHash, EgressOrigin, FunctionId, VersionLabel};
 
 async fn ensure_table(client: &Client, table: &str) {
     if client
@@ -69,12 +69,15 @@ async fn upsert_resolve_list() {
     let label = VersionLabel::latest();
     let hash = ContentHash::from_bytes(b"hello");
 
+    let allow = vec![EgressOrigin::parse("https://api.example.com").unwrap()];
+
     catalog
-        .upsert(&id, &label, hash.clone(), 1)
+        .upsert(&id, &label, hash.clone(), 1, &allow)
         .await
         .expect("upsert");
     let resolved = catalog.resolve(&id, &label).await.expect("resolve");
     assert_eq!(resolved.content_hash, hash);
+    assert_eq!(resolved.egress_allow, allow);
 
     let listed = catalog.list().await.expect("list");
     assert!(listed.iter().any(|v| v.id == id && v.content_hash == hash));
@@ -110,15 +113,15 @@ async fn stale_upsert_does_not_clobber() {
     let new = ContentHash::from_bytes(b"new");
 
     assert!(catalog
-        .upsert(&id, &label, old.clone(), 100)
+        .upsert(&id, &label, old.clone(), 100, &[])
         .await
         .expect("first"));
     assert!(catalog
-        .upsert(&id, &label, new.clone(), 200)
+        .upsert(&id, &label, new.clone(), 200, &[])
         .await
         .expect("newer"));
     assert!(!catalog
-        .upsert(&id, &label, old.clone(), 150)
+        .upsert(&id, &label, old.clone(), 150, &[])
         .await
         .expect("stale"));
 

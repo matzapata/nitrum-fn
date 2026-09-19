@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use domain::{ContentHash, FunctionId, FunctionVersion, VersionLabel};
+use domain::{ContentHash, EgressOrigin, FunctionId, FunctionVersion, VersionLabel};
 
 use crate::AppError;
 
@@ -13,6 +13,7 @@ pub trait FunctionCatalog: Send + Sync {
         label: &VersionLabel,
         hash: ContentHash,
         queued_at_ms: u64,
+        egress_allow: &[EgressOrigin],
     ) -> Result<bool, AppError>;
 
     /// Resolve `id`@`label` to the latest version record, or `None` if not found.

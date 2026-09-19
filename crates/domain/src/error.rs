@@ -10,4 +10,10 @@ pub enum DomainError {
 
     #[error("invalid content hash: {0}")]
     InvalidContentHash(String),
+
+    #[error("invalid egress origin: {0}")]
+    InvalidEgressOrigin(String),
+
+    #[error("too many egress origins (max {max})")]
+    TooManyEgressOrigins { max: usize },
 }

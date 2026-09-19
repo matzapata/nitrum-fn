@@ -28,17 +28,18 @@ impl InvokeFunction {
     #[instrument(skip(self, req), fields(function = %req.function, version = %req.version.as_str()))]
     pub async fn execute(&self, req: InvokeRequest) -> Result<InvokeResponse, AppError> {
         let version = self.catalog.resolve(&req.function, &req.version).await?;
+        let hash = version.content_hash.clone();
 
-        // Load-only: deserialize the publish-time .cwasm. No Cranelift fallback —
-        // the API must emit AOT for the same target as the enclave (musl).
-        let compiled = self.artifacts.get_compiled(&version.content_hash).await?;
+        // Trusted path: load `.wasm`, re-hash in the store, Cranelift in the host.
+        let wasm = self.artifacts.get(&hash).await?;
         let outcome = self
             .runner
-            .run_precompiled(&version.content_hash, &compiled, &req.payload)
+            .run(&hash, &wasm, &req.payload, &version.egress_allow)
             .await?;
 
         Ok(InvokeResponse {
             output: outcome.output,
+            content_hash: hash,
         })
     }
 }
@@ -64,6 +65,7 @@ mod tests {
             _label: &VersionLabel,
             _hash: ContentHash,
             _queued_at_ms: u64,
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<bool, AppError> {
             Ok(true)
         }
@@ -85,24 +87,21 @@ mod tests {
     }
 
     struct MemArtifacts {
+        /// Catalog hash key → bytes (may intentionally mismatch for tests).
         wasm: Mutex<HashMap<String, Vec<u8>>>,
-        compiled: Mutex<HashMap<String, Vec<u8>>>,
     }
 
     impl MemArtifacts {
-        fn with_both(hash: &ContentHash, wasm: Vec<u8>, compiled: Vec<u8>) -> Self {
-            let key = hash.to_hex();
-            Self {
-                wasm: Mutex::new(HashMap::from([(key.clone(), wasm)])),
-                compiled: Mutex::new(HashMap::from([(key, compiled)])),
-            }
-        }
-
         fn wasm_only(hash: &ContentHash, wasm: Vec<u8>) -> Self {
             let key = hash.to_hex();
             Self {
                 wasm: Mutex::new(HashMap::from([(key, wasm)])),
-                compiled: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn wrong_bytes(catalog_hash: &ContentHash, wrong: Vec<u8>) -> Self {
+            Self {
+                wasm: Mutex::new(HashMap::from([(catalog_hash.to_hex(), wrong)])),
             }
         }
     }
@@ -119,81 +118,49 @@ mod tests {
         }
 
         async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-            self.wasm
+            let bytes = self
+                .wasm
                 .lock()
                 .unwrap()
                 .get(&hash.to_hex())
                 .cloned()
-                .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
-        }
-
-        async fn put_compiled(&self, hash: &ContentHash, compiled: &[u8]) -> Result<(), AppError> {
-            self.compiled
-                .lock()
-                .unwrap()
-                .insert(hash.to_hex(), compiled.to_vec());
-            Ok(())
-        }
-
-        async fn get_compiled(&self, hash: &ContentHash) -> Result<Vec<u8>, AppError> {
-            self.compiled
-                .lock()
-                .unwrap()
-                .get(&hash.to_hex())
-                .cloned()
-                .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))
+                .ok_or_else(|| AppError::ArtifactMissing(hash.to_hex()))?;
+            let actual = ContentHash::from_bytes(&bytes);
+            if actual != *hash {
+                return Err(AppError::HashMismatch {
+                    expected: hash.to_hex(),
+                    actual: actual.to_hex(),
+                });
+            }
+            Ok(bytes)
         }
     }
 
     struct Runner {
-        precompiled: Mutex<u32>,
         from_wasm: Mutex<u32>,
-        fail_precompiled: bool,
-        trap_precompiled: bool,
+        trap: bool,
     }
 
     impl Runner {
-        fn new(fail_precompiled: bool) -> Self {
+        fn ok() -> Self {
             Self {
-                precompiled: Mutex::new(0),
                 from_wasm: Mutex::new(0),
-                fail_precompiled,
-                trap_precompiled: false,
+                trap: false,
             }
         }
 
         fn trapping() -> Self {
             Self {
-                precompiled: Mutex::new(0),
                 from_wasm: Mutex::new(0),
-                fail_precompiled: false,
-                trap_precompiled: true,
+                trap: true,
             }
         }
     }
 
     #[async_trait]
     impl FunctionRunner for Runner {
-        async fn compile(&self, _hash: &ContentHash, _wasm: &[u8]) -> Result<Vec<u8>, AppError> {
-            Ok(b"compiled".to_vec())
-        }
-
-        async fn run_precompiled(
-            &self,
-            _hash: &ContentHash,
-            _compiled: &[u8],
-            input: &[u8],
-        ) -> Result<RunOutcome, AppError> {
-            *self.precompiled.lock().unwrap() += 1;
-            if self.trap_precompiled {
-                return Err(AppError::Trap("unreachable".into()));
-            }
-            if self.fail_precompiled {
-                return Err(AppError::Invoke("deserialize compiled module: abi".into()));
-            }
-            Ok(RunOutcome {
-                output: input.to_vec(),
-            })
+        async fn validate(&self, _wasm: &[u8]) -> Result<(), AppError> {
+            Ok(())
         }
 
         async fn run(
@@ -201,15 +168,19 @@ mod tests {
             _hash: &ContentHash,
             _wasm: &[u8],
             input: &[u8],
+            _egress_allow: &[domain::EgressOrigin],
         ) -> Result<RunOutcome, AppError> {
             *self.from_wasm.lock().unwrap() += 1;
+            if self.trap {
+                return Err(AppError::Trap("unreachable".into()));
+            }
             let mut out = b"wasm:".to_vec();
             out.extend_from_slice(input);
             Ok(RunOutcome { output: out })
         }
     }
 
-    fn harness(runner: Arc<Runner>) -> (InvokeFunction, Arc<Runner>) {
+    fn harness(runner: Arc<Runner>) -> (InvokeFunction, Arc<Runner>, ContentHash) {
         let wasm = b"\0asm fake";
         let hash = ContentHash::from_bytes(wasm);
         let id = FunctionId::new("echo").unwrap();
@@ -218,40 +189,20 @@ mod tests {
                 id: id.clone(),
                 label: VersionLabel::latest(),
                 content_hash: hash.clone(),
-            },
-        });
-        let artifacts = Arc::new(MemArtifacts::with_both(
-            &hash,
-            wasm.to_vec(),
-            b"cwasm".to_vec(),
-        ));
-        (
-            InvokeFunction::new(catalog, artifacts, runner.clone()),
-            runner,
-        )
-    }
-
-    fn harness_missing_cwasm(runner: Arc<Runner>) -> (InvokeFunction, Arc<Runner>) {
-        let wasm = b"\0asm fake";
-        let hash = ContentHash::from_bytes(wasm);
-        let id = FunctionId::new("echo").unwrap();
-        let catalog = Arc::new(FixedCatalog {
-            version: FunctionVersion {
-                id: id.clone(),
-                label: VersionLabel::latest(),
-                content_hash: hash.clone(),
+                egress_allow: vec![],
             },
         });
         let artifacts = Arc::new(MemArtifacts::wasm_only(&hash, wasm.to_vec()));
         (
             InvokeFunction::new(catalog, artifacts, runner.clone()),
             runner,
+            hash,
         )
     }
 
     #[tokio::test]
-    async fn uses_precompiled_when_it_runs() {
-        let (invoke, runner) = harness(Arc::new(Runner::new(false)));
+    async fn runs_from_verified_wasm() {
+        let (invoke, runner, hash) = harness(Arc::new(Runner::ok()));
         let out = invoke
             .execute(InvokeRequest {
                 function: FunctionId::new("echo").unwrap(),
@@ -260,14 +211,29 @@ mod tests {
             })
             .await
             .expect("invoke");
-        assert_eq!(out.output, b"hi");
-        assert_eq!(*runner.precompiled.lock().unwrap(), 1);
-        assert_eq!(*runner.from_wasm.lock().unwrap(), 0);
+        assert_eq!(out.output, b"wasm:hi");
+        assert_eq!(out.content_hash, hash);
+        assert_eq!(*runner.from_wasm.lock().unwrap(), 1);
     }
 
     #[tokio::test]
-    async fn deserialize_failure_does_not_compile_from_wasm() {
-        let (invoke, runner) = harness(Arc::new(Runner::new(true)));
+    async fn missing_wasm_is_artifact_missing() {
+        let wasm = b"\0asm fake";
+        let hash = ContentHash::from_bytes(wasm);
+        let id = FunctionId::new("echo").unwrap();
+        let catalog = Arc::new(FixedCatalog {
+            version: FunctionVersion {
+                id: id.clone(),
+                label: VersionLabel::latest(),
+                content_hash: hash.clone(),
+                egress_allow: vec![],
+            },
+        });
+        let artifacts = Arc::new(MemArtifacts {
+            wasm: Mutex::new(HashMap::new()),
+        });
+        let runner = Arc::new(Runner::ok());
+        let invoke = InvokeFunction::new(catalog, artifacts, runner.clone());
         let err = invoke
             .execute(InvokeRequest {
                 function: FunctionId::new("echo").unwrap(),
@@ -275,31 +241,44 @@ mod tests {
                 payload: b"hi".to_vec(),
             })
             .await
-            .expect_err("deserialize");
-        assert!(matches!(err, AppError::Invoke(_)), "{err}");
-        assert_eq!(*runner.precompiled.lock().unwrap(), 1);
-        assert_eq!(*runner.from_wasm.lock().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn missing_cwasm_is_artifact_missing() {
-        let (invoke, runner) = harness_missing_cwasm(Arc::new(Runner::new(false)));
-        let err = invoke
-            .execute(InvokeRequest {
-                function: FunctionId::new("echo").unwrap(),
-                version: VersionLabel::latest(),
-                payload: b"hi".to_vec(),
-            })
-            .await
-            .expect_err("missing cwasm");
+            .expect_err("missing wasm");
         assert!(matches!(err, AppError::ArtifactMissing(_)), "{err}");
-        assert_eq!(*runner.precompiled.lock().unwrap(), 0);
         assert_eq!(*runner.from_wasm.lock().unwrap(), 0);
     }
 
     #[tokio::test]
-    async fn guest_trap_on_precompiled_does_not_fall_back() {
-        let (invoke, runner) = harness(Arc::new(Runner::trapping()));
+    async fn wrong_bytes_is_hash_mismatch() {
+        let catalog_hash = ContentHash::from_bytes(b"\0asm expected");
+        let id = FunctionId::new("echo").unwrap();
+        let catalog = Arc::new(FixedCatalog {
+            version: FunctionVersion {
+                id: id.clone(),
+                label: VersionLabel::latest(),
+                content_hash: catalog_hash.clone(),
+                egress_allow: vec![],
+            },
+        });
+        let artifacts = Arc::new(MemArtifacts::wrong_bytes(
+            &catalog_hash,
+            b"\0asm wrong-bytes".to_vec(),
+        ));
+        let runner = Arc::new(Runner::ok());
+        let invoke = InvokeFunction::new(catalog, artifacts, runner.clone());
+        let err = invoke
+            .execute(InvokeRequest {
+                function: FunctionId::new("echo").unwrap(),
+                version: VersionLabel::latest(),
+                payload: b"hi".to_vec(),
+            })
+            .await
+            .expect_err("hash mismatch");
+        assert!(matches!(err, AppError::HashMismatch { .. }), "{err}");
+        assert_eq!(*runner.from_wasm.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn guest_trap_propagates() {
+        let (invoke, runner, _) = harness(Arc::new(Runner::trapping()));
         let err = invoke
             .execute(InvokeRequest {
                 function: FunctionId::new("echo").unwrap(),
@@ -309,6 +288,6 @@ mod tests {
             .await
             .expect_err("trap");
         assert!(matches!(err, AppError::Trap(_)), "{err}");
-        assert_eq!(*runner.from_wasm.lock().unwrap(), 0);
+        assert_eq!(*runner.from_wasm.lock().unwrap(), 1);
     }
 }

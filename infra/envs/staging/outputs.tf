@@ -33,21 +33,6 @@ output "api_image" {
   value       = var.api_image
 }
 
-output "worker_image" {
-  description = "Container image URI the publish-worker task pulls"
-  value       = var.worker_image
-}
-
-output "publish_topic_arn" {
-  description = "SNS topic for publish-queued events"
-  value       = module.store.publish_topic_arn
-}
-
-output "compile_queue_url" {
-  description = "SQS compile queue URL"
-  value       = module.store.compile_queue_url
-}
-
 output "nlb_dns_name" {
   description = "Enclave NLB DNS name (null when enable_enclave is false)"
   value       = var.enable_enclave ? module.enclave[0].nlb_dns_name : null
@@ -56,6 +41,11 @@ output "nlb_dns_name" {
 output "invoke_url" {
   description = "Invoke HTTPS URL (NLB DNS; self-signed enclave cert — use curl -k)"
   value       = var.enable_enclave ? "https://${module.enclave[0].nlb_dns_name}" : null
+}
+
+output "pcr0" {
+  description = "Enclave PCR0 (eif_image_sha384). Null when enable_enclave is false."
+  value       = var.enable_enclave ? var.eif_image_sha384 : null
 }
 
 output "eif_s3_uri" {

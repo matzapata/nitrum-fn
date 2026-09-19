@@ -1,5 +1,7 @@
-# Resource names come from ECS/SSM env. This overlay drops emulator endpoints.
 artifacts:
+  bucket: nitrum-fn-artifacts-prod
   endpoint: null
 catalog:
+  table: nitrum-fn-fn-catalog
+  publish_lock_table: nitrum-fn-fn-publish-lock
   endpoint: null

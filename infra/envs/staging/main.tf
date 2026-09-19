@@ -7,17 +7,20 @@ module "network" {
 module "store" {
   source = "../../modules/store"
 
-  project_name          = var.project_name
-  retain                = var.retain
-  eif_s3_key            = local.eif_s3_key
-  sns_alarm_topic_arn   = var.sns_alarm_topic_arn
-  log_retention_in_days = var.log_retention_in_days
+  project_name            = var.project_name
+  artifacts_bucket_name   = local.artifacts_bucket_name
+  catalog_table_name      = local.catalog_table_name
+  publish_lock_table_name = local.publish_lock_table_name
+  run_env                 = local.run_env
+  retain                  = var.retain
+  log_retention_in_days   = var.log_retention_in_days
 }
 
 module "api" {
   source = "../../modules/api"
 
   project_name            = var.project_name
+  run_env                 = local.run_env
   vpc_id                  = module.network.vpc_id
   public_subnet_ids       = module.network.public_subnet_ids
   private_subnet_ids      = module.network.private_subnet_ids
@@ -27,32 +30,8 @@ module "api" {
   catalog_table_arn       = module.store.catalog_table_arn
   publish_lock_table_name = module.store.publish_lock_table_name
   publish_lock_table_arn  = module.store.publish_lock_table_arn
-  publish_topic_arn       = module.store.publish_topic_arn
   image                   = var.api_image
   desired_count           = var.api_desired_count
-  log_retention_in_days   = var.log_retention_in_days
-  metrics_log_group_name  = module.store.metrics_log_group_name
-  metrics_log_group_arn   = module.store.metrics_log_group_arn
-  otel_collector_image    = var.otel_collector_image
-  enable_xray_tracing     = var.enable_xray_tracing
-}
-
-module "worker" {
-  source = "../../modules/worker"
-
-  project_name            = var.project_name
-  vpc_id                  = module.network.vpc_id
-  private_subnet_ids      = module.network.private_subnet_ids
-  artifacts_bucket_name   = module.store.artifacts_bucket_name
-  artifacts_bucket_arn    = module.store.artifacts_bucket_arn
-  catalog_table_name      = module.store.catalog_table_name
-  catalog_table_arn       = module.store.catalog_table_arn
-  publish_lock_table_name = module.store.publish_lock_table_name
-  publish_lock_table_arn  = module.store.publish_lock_table_arn
-  compile_queue_url       = module.store.compile_queue_url
-  compile_queue_arn       = module.store.compile_queue_arn
-  image                   = var.worker_image
-  desired_count           = var.worker_desired_count
   log_retention_in_days   = var.log_retention_in_days
   metrics_log_group_name  = module.store.metrics_log_group_name
   metrics_log_group_arn   = module.store.metrics_log_group_arn
@@ -71,7 +50,6 @@ module "enclave" {
   public_subnet_ids                = module.network.public_subnet_ids
   private_subnet_ids               = module.network.private_subnet_ids
   eif_s3_bucket                    = module.store.eif_bucket_name
-  eif_s3_key                       = module.store.eif_s3_key
   eif_source_path                  = local.eif_source_path
   eif_version_label                = var.eif_version_label
   eif_image_sha384                 = var.eif_image_sha384
