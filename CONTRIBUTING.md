@@ -19,7 +19,6 @@ Local checks and `bash tests/e2e/local.sh` do **not** need `nitrum` (local e2e s
 
 Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 
-
 | Target                    | What                                                |
 | ------------------------- | --------------------------------------------------- |
 | `make format`             | `cargo fmt --all`                                   |
@@ -29,9 +28,6 @@ Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 | `make adapters`           | Floci + catalog/artifacts integration tests         |
 | `bash tests/e2e/local.sh` | local publish + invoke                              |
 | `make ci`                 | `check` + `audit` + `test` + `adapters` + local e2e |
-
-
-
 
 ## Local stack
 
@@ -55,12 +51,10 @@ Automated platform smoke (`nitrum-fn new` → build → deploy → invoke): `bas
 
 ## Images
 
-
 | File             | Binary                        | Where                                 |
 | ---------------- | ----------------------------- | ------------------------------------- |
 | `Dockerfile`     | data-plane + `nitrum-fn-host` | EIF via `nitrum build`; GHCR `…/host` |
 | `Dockerfile.api` | `nitrum-fn-api`               | Fargate / GHCR `…/api`                |
-
 
 ```bash
 make images            # local linux/amd64 builds of api and host; no push
@@ -79,8 +73,6 @@ If Terraform still pins `:latest`, force ECS redeploy:
 ```bash
 aws ecs update-service --cluster nitrum-fn-api --service nitrum-fn-api --force-new-deployment
 ```
-
-
 
 ## Cloud e2e
 
@@ -184,20 +176,15 @@ Needs `PRIVATE_KEY`, `BASE_SEPOLIA_RPC_URL`, `ORACLE_ADDRESS` in the environment
 ./examples/oracle/e2e.sh
 ```
 
-
-
-
 ## Releases
 
 Push a SemVer tag (`vMAJOR.MINOR.PATCH`). The [Release workflow](.github/workflows/release.yml) re-runs CI, then:
-
 
 | Job    | Publishes                                                    |
 | ------ | ------------------------------------------------------------ |
 | `api`  | GHCR `…/api`                                                 |
 | `host` | GHCR `…/host` + EIF + measurements                           |
 | `cli`  | `nitrum-fn-{linux-x86_64,darwin-aarch64,windows-x86_64.exe}` |
-
 
 Install the CLI: `curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-fn/main/scripts/install-nitrum-fn.sh | bash` (or `NITRUM_FN_VERSION=v…`).
 

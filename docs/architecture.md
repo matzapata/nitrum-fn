@@ -40,20 +40,26 @@ flowchart LR
   Fleet --> DP
 ```
 
+## Product shape
 
+Nitrum is the enclave platform. `nitrum-fn` is the FaaS product on top of it.
 
+| Nitrum (platform) | nitrum-fn (this repo) |
+|---|---|
+| EIF build, control-plane, data-plane TLS/ACME | WASM host (`/invoke`, module/instance cache) |
+| Attestation, KMS DEK, egress, OTel plumbing | Function catalog, artifact store |
+| `nitrum cloud deploy` / ASG / NLB | Deploy CLI |
 
+**Why a separate repo:** independent release cadence (PCR0 stays stable across host changes) and a focused product surface: WASM host, catalog, and CLI.
 
 ## Trust model
 
 The split is the product:
 
-
 | Path              | Who                               | Sees plaintext invoke bodies?        |
 | ----------------- | --------------------------------- | ------------------------------------ |
 | Publish / catalog | API, CLI, later dashboard         | No — metadata and `.wasm` bytes only |
 | Invoke            | Host inside the enclave           | Yes — after TLS termination          |
-
 
 Rules that follow:
 
@@ -78,8 +84,6 @@ flowchart TB
   TLS -->|"plaintext POST /invoke/{fn}"| Wasm
   Wasm -.->|"cache miss: get + re-hash"| S3
 ```
-
-
 
 Density is bounded by warm modules in enclave RAM, not by booting an enclave per request. Enclave boot is fleet capacity.
 
@@ -124,14 +128,10 @@ flowchart TB
   CP --> S3
 ```
 
-
-
-
 | Surface           | Where                   | Protocol                             |
 | ----------------- | ----------------------- | ------------------------------------ |
 | Publish / catalog | Fargate behind an ALB   | HTTP (`api_url`)                     |
 | Invoke            | Nitro ASG behind an NLB | HTTPS, TLS in-enclave (`invoke_url`) |
-
 
 `project_name` must equal `[project].name` in the root `nitrum.toml` (`nitrum-fn`). Environment is account + DNS overlay (`NITRUM_FN_ENV=staging|prod`), not a second project slug.
 
@@ -139,12 +139,32 @@ The enclave image is `Dockerfile` (`nitrum build`). It is **not** deployed with 
 
 ## Components
 
+Hexagonal core (`domain` / `application` ports and use cases) with Nitrum-style capability crates. Only composition roots wire the concrete set.
 
+```text
+nitrum-fn/
+├── crates/
+│   ├── domain/          # FnId, Version, ContentHash, invoke/publish types
+│   ├── application/     # ports + use cases (InvokeFunction, PublishFunction)
+│   ├── executor/        # Wasmtime runner
+│   ├── runtime/         # function SDK: Request/Response, run, service_fn
+│   ├── catalog/         # name → version, sha256 (no bodies)
+│   ├── artifacts/       # get/put .wasm by content hash
+│   ├── host/            # enclave start_command — HTTP /invoke
+│   ├── api/             # deploy / management (validate + store + catalog)
+│   ├── telemetry/       # OTel init shared by bins
+│   ├── cli/             # talks to api
+│   └── payments/        # x402 (later)
+└── examples/
+    ├── hello-world/
+    └── oracle/              # enclave guest + Foundry on-chain consumer
+```
+
+The invoke path (`host` → `InvokeFunction` → `executor`) sees plaintext bodies. Publish / catalog / API see metadata and code artifacts. `runtime` is linked into guest `.wasm`.
 
 ### CLI (`crates/cli`, binary `nitrum-fn`)
 
 Talks to the API and the host. It never runs wasm.
-
 
 | Command    | Role                                                               |
 | ---------- | ------------------------------------------------------------------ |
@@ -153,20 +173,15 @@ Talks to the API and the host. It never runs wasm.
 | `describe` | sha256 of a local `.wasm` (same value as `x-nitrum-fn-shasum`)     |
 | `invoke`   | `POST /invoke/{name}`; optional hash pin, PCR0, attestation verify |
 
-
-
-
 ### Management API (`crates/api`)
 
 Fargate composition root. Hexagonal use case: `PublishFunction`.
-
 
 | Method | Path                | Purpose                                              |
 | ------ | ------------------- | ---------------------------------------------------- |
 | `GET`  | `/healthz`          | Liveness                                             |
 | `PUT`  | `/functions/{name}` | Validate wasm (no Cranelift), store, upsert catalog  |
 | `GET`  | `/functions/{name}` | Resolve `latest` (hash + egress allowlist)           |
-
 
 `PUT` returns `200` with `status: "ready"` once the catalog row is written. Concurrent publish of the same name is `409`.
 
@@ -246,8 +261,6 @@ flowchart TB
   API --> EX
 ```
 
-
-
 Trust rule in crate terms: only `host` → `InvokeFunction` → `executor` sees plaintext bodies. `runtime` is not on that path; it is compiled into user wasm. Publish-time `validate` in `api` never runs Cranelift.
 
 ## Publish pipeline
@@ -272,8 +285,6 @@ sequenceDiagram
     API-->>CLI: 200 ready
   end
 ```
-
-
 
 `latest` is the only label written today. Invoke may still send `x-nitrum-fn-version`; unknown labels 404.
 
@@ -310,8 +321,6 @@ sequenceDiagram
   end
   H-->>C: body + x-nitrum-fn-shasum [+ attestation]
 ```
-
-
 
 Module compile is cached in-process by content hash. Instance is per-request (fresh store, limiter, epoch deadline).
 
@@ -367,8 +376,6 @@ flowchart LR
   Doc --> Body
 ```
 
-
-
 Local host never mints a document. On-chain submit needs staging (or prod) enclaves.
 
 ## Config overlays
@@ -391,13 +398,11 @@ Host config is resolved next to the binary so the EIF does not depend on cwd.
 
 Compose runs **emulators only** (Floci: S3 + DynamoDB on `:4566`). `api` and `host` stay on `cargo run`.
 
-
 | Process | Default port |
 | ------- | ------------ |
 | API     | 8080         |
 | Host    | 8081         |
 | Floci   | 4566         |
-
 
 Same use cases and adapters as cloud; attestation is a no-op.
 
@@ -406,7 +411,6 @@ Same use cases and adapters as cloud; attestation is a no-op.
 `crates/telemetry` owns process-wide init. Bins always log to stdout. When `OTEL_EXPORTER_OTLP_ENDPOINT` is set they also export traces, metrics, and logs (gRPC by default). Staging Fargate and the Nitro host run an ADOT collector that writes EMF to `/nitrum/<project>/metrics`. HTTP latency is `http.server.request.duration`. Product/business metrics are not defined yet.
 
 ## Limits (product, 0.1)
-
 
 | Limit                 | Value                |
 | --------------------- | -------------------- |
@@ -420,5 +424,4 @@ Same use cases and adapters as cloud; attestation is a no-op.
 | Outbound GET body     | 256 KiB              |
 | Outbound GET timeout  | 3 s                  |
 | Function name         | 1–64 `[A-Za-z0-9_-]` |
-
 
