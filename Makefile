@@ -26,7 +26,7 @@ audit:
 test:
 	cargo test --workspace --lib --bins
 
-test-adapters:
+adapters:
 	docker compose up -d --remove-orphans floci
 	NITRUM_FN_ARTIFACTS__ENDPOINT=http://127.0.0.1:4566 \
 	NITRUM_FN_CATALOG__ENDPOINT=http://127.0.0.1:4566 \
