@@ -83,7 +83,8 @@ dump_logs() {
 wait_healthz() {
     local url="$1" pid="$2" log="$3" label="$4"
     local ready=0
-    for _ in $(seq 1 180); do
+    # 10 min: cold CI still compiles wasmtime even after a workspace cargo build.
+    for _ in $(seq 1 1200); do
         if curl -sf "${url}/healthz" >/dev/null 2>&1; then
             ready=1
             break
@@ -117,6 +118,13 @@ if ! docker compose run --rm aws-init; then
 fi
 log_ok "store ready"
 common_env
+
+# Compile once so the two `cargo run`s do not fight the target lock on a cold CI cache.
+log_step "build api, host, and CLI"
+if ! cargo build -p api -p host -p cli; then
+    die "workspace build failed"
+fi
+log_ok "binaries ready"
 
 log_step "start api on :${API_PORT} (publish + catalog)"
 NITRUM_FN_SERVER__PORT="${API_PORT}" \

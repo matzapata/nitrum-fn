@@ -50,9 +50,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: rustsec/audit-check@v2.0.0
+      # Prebuilt binary: rustsec/audit-check compiles cargo-audit, and current
+      # cargo-audit deps need rustc 1.96 while this repo pins 1.95.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - name: Audit
+        run: cargo audit
 
   test:
     name: Rust Test
