@@ -344,7 +344,7 @@ Outbound fetch uses a second envelope `{ "status", "body_base64" }` written into
 
 On a successful invoke with a valid nonce, the host asks Nitrum for an NSM document:
 
-```
+```text
 user_data[0..32]  = sha256(wasm bytes compiled)
 user_data[32..64] = sha256(HTTP response body)
 nonce             = caller-supplied 16..=32 bytes
@@ -382,7 +382,7 @@ Local host never mints a document. On-chain submit needs staging (or prod) encla
 
 Long-running bins load YAML, then `NITRUM_FN_*` env (`__` nests):
 
-```
+```text
 config/shared/base.yaml
 config/shared/{NITRUM_FN_ENV}.yaml
 config/{api|host|worker}/base.yaml
@@ -424,4 +424,3 @@ Same use cases and adapters as cloud; attestation is a no-op.
 | Outbound GET body     | 256 KiB              |
 | Outbound GET timeout  | 3 s                  |
 | Function name         | 1–64 `[A-Za-z0-9_-]` |
-

@@ -11,7 +11,7 @@ Minimal nitrum-fn guest: no egress, JSON `{"message":"Hello, world!"}`.
 
 That builds the wasm, deploys it, and invokes with `--fn-shasum`. Override URLs with `NITRUM_FN_API_URL` / `NITRUM_FN_INVOKE_URL` (defaults `http://127.0.0.1:8080` / `8081`). Staging invoke is HTTPS: the script adds `--insecure`; pin PCR0 from `terraform output -raw pcr0` (see [CONTRIBUTING.md](../../CONTRIBUTING.md#cloud-e2e)).
 
-```
+```text
 examples/hello-world/
   e2e.sh       # build → deploy → invoke
   src/lib.rs   # handler

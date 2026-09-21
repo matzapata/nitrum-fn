@@ -1,4 +1,4 @@
-# Guest WASM fixtures for benches and tests.
+# Guest WASM fixtures for benches and tests
 
 - `echo.wat` / `echo.wasm` — minimal v0 ABI (memory + invoke echo; unit tests)
 - `hello_world.wasm` — release build of `examples/hello-world` (host-path benches)

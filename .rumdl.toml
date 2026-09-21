@@ -1,0 +1,8 @@
+# Pin the CLI in CI / CONTRIBUTING to 0.2.75. Line length is off: first-party
+# docs mix ~80-column wrap with longer prose, tables, and shell one-liners.
+[global]
+disable = ["MD013"]
+exclude = ["examples/oracle/contracts/lib/**"]
+
+[MD033]
+allowed_elements = ["video"]

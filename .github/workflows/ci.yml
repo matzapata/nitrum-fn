@@ -30,6 +30,20 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+  markdown:
+    name: Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rvben/rumdl@v0
+        with:
+          version: "0.2.75"
+          install-only: true
+      - name: Format
+        run: rumdl fmt --check .
+      - name: Lint
+        run: rumdl check .
+
   lint:
     name: Rust Lint (Clippy)
     runs-on: ubuntu-latest

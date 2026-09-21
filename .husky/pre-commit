@@ -3,10 +3,10 @@ set -e
 
 echo "=== Running pre-commit checks ==="
 
-echo "1. Checking Rust formatting..."
+echo "1. Checking formatting (Rust + Markdown)..."
 make fmt-check
 
-echo "2. Running Clippy (Rust linter)..."
+echo "2. Running linters (Clippy + rumdl)..."
 make lint
 
 echo "3. Running Rust tests..."

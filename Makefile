@@ -11,12 +11,15 @@ HOST_IMAGE ?= $(IMAGE_PREFIX)/host:$(TAG)
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
+	rumdl check .
 
 format:
 	cargo fmt --all
+	rumdl fmt .
 
 fmt-check:
 	cargo fmt --all -- --check
+	rumdl fmt --check .
 
 check: fmt-check lint
 

@@ -5,6 +5,7 @@ Product context: `[README.md](README.md)`. Terraform modules: `[infra/README.md]
 ## Prerequisites
 
 - Rust **1.95** (`rust-toolchain.toml`)
+- [rumdl](https://github.com/rvben/rumdl) **0.2.75** (`cargo install rumdl --locked --version 0.2.75`)
 - Docker (Compose for Floci; Buildx/QEMU on Apple Silicon for `linux/amd64`)
 - Guest examples: `rustup target add wasm32-unknown-unknown`
 - Staging / EIF: [Nitrum CLI](https://github.com/matzapata/nitrum) (`nitrum build` / `nitrum describe`), AWS credentials, Terraform ≥ 1.5, and a state backend ([infra README](infra/README.md#prerequisites-once-per-account))
@@ -21,8 +22,8 @@ Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 
 | Target                    | What                                                |
 | ------------------------- | --------------------------------------------------- |
-| `make format`             | `cargo fmt --all`                                   |
-| `make check`              | fmt check + Clippy (`-D warnings`)                  |
+| `make format`             | `cargo fmt --all` + `rumdl fmt .`                   |
+| `make check`              | rustfmt + rumdl + Clippy (`-D warnings`)            |
 | `make audit`              | `cargo audit`                                       |
 | `make test`               | `cargo test --workspace --lib --bins`               |
 | `make adapters`           | Floci + catalog/artifacts integration tests         |
@@ -190,4 +191,3 @@ Install the CLI: `curl -fsSL https://raw.githubusercontent.com/matzapata/nitrum-
 
 1. **Fargate (**`api`**)** — pin `api_image` to `:$tag`. Force ECS redeploy if the URI is still `:latest`.
 2. **Host** — download `nitrum-fn.eif` from the release into `.nitrum/artifacts/`, copy `eif_version_label` / `eif_image_sha384` from `nitrum-fn.eif.json` (or the release notes), `terraform apply`. Rebuild with `nitrum build` only when you want a new PCR0.
-
