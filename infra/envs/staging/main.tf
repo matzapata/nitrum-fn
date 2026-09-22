@@ -11,6 +11,9 @@ module "store" {
   artifacts_bucket_name   = local.artifacts_bucket_name
   catalog_table_name      = local.catalog_table_name
   publish_lock_table_name = local.publish_lock_table_name
+  accounts_table_name     = local.accounts_table_name
+  keys_table_name         = local.keys_table_name
+  receipts_table_name     = local.receipts_table_name
   run_env                 = local.run_env
   retain                  = var.retain
   log_retention_in_days   = var.log_retention_in_days
@@ -30,6 +33,10 @@ module "api" {
   catalog_table_arn       = module.store.catalog_table_arn
   publish_lock_table_name = module.store.publish_lock_table_name
   publish_lock_table_arn  = module.store.publish_lock_table_arn
+  accounts_table_arn      = module.store.accounts_table_arn
+  keys_table_arn          = module.store.keys_table_arn
+  keys_index_arn          = module.store.keys_index_arn
+  receipts_table_arn      = module.store.receipts_table_arn
   image                   = var.api_image
   desired_count           = var.api_desired_count
   log_retention_in_days   = var.log_retention_in_days
@@ -88,6 +95,40 @@ data "aws_iam_policy_document" "enclave_fn_store" {
       "dynamodb:Query",
     ]
     resources = [module.store.catalog_table_arn]
+  }
+
+  # Debit and refund only. No PutItem, so the enclave cannot create accounts or receipts.
+  statement {
+    sid    = "AccountsDebit"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [
+      module.store.accounts_table_arn,
+      module.store.keys_table_arn,
+    ]
+  }
+}
+
+locals {
+  enclave_debit_actions = try([
+    for s in jsondecode(data.aws_iam_policy_document.enclave_fn_store[0].json).Statement :
+    s.Action if s.Sid == "AccountsDebit"
+  ][0], [])
+}
+
+check "enclave_debit_is_get_and_update_only" {
+  assert {
+    condition = (
+      var.enable_enclave == false || (
+        contains(local.enclave_debit_actions, "dynamodb:GetItem") &&
+        contains(local.enclave_debit_actions, "dynamodb:UpdateItem") &&
+        !contains(local.enclave_debit_actions, "dynamodb:PutItem")
+      )
+    )
+    error_message = "Enclave instance role on accounts and keys must be GetItem and UpdateItem only (no PutItem)."
   }
 }
 

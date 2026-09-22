@@ -12,10 +12,11 @@ use domain::{
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
+use crate::accounts_http::{self, bearer_secret};
 use crate::error::HttpError;
 use crate::state::{ApiState, CatalogState, PublishState};
 use application::ports::FunctionCatalog;
-use application::PublishFunction;
+use application::{Accounts, AppError, PublishFunction};
 
 /// Health + catalog GET.
 fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
@@ -27,17 +28,31 @@ fn catalog_router(catalog: Arc<dyn FunctionCatalog>) -> Router {
 }
 
 /// PUT /functions/{name} — validate, store, upsert catalog.
-fn publish_router(usecase: Arc<PublishFunction>) -> Router {
+fn publish_router(
+    usecase: Arc<PublishFunction>,
+    accounts: Arc<Accounts>,
+    min_deploy_credits: u64,
+) -> Router {
     Router::new()
         .route("/functions/{name}", put(publish))
         .layer(DefaultBodyLimit::max(MAX_WASM_BYTES))
         .layer(TraceLayer::new_for_http())
-        .with_state(PublishState { publish: usecase })
+        .with_state(PublishState {
+            publish: usecase,
+            accounts,
+            min_deploy_credits,
+        })
 }
 
 pub fn router(state: ApiState) -> Router {
     telemetry::http::instrument_router(
-        catalog_router(state.catalog).merge(publish_router(state.publish)),
+        catalog_router(state.catalog)
+            .merge(publish_router(
+                state.publish,
+                state.accounts.clone(),
+                state.min_deploy_credits,
+            ))
+            .merge(accounts_http::router(state.accounts)),
     )
 }
 
@@ -79,6 +94,18 @@ async fn publish(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, HttpError> {
+    if state.min_deploy_credits > 0 {
+        let secret = bearer_secret(&headers).ok_or(AppError::Unauthorized)?;
+        let view = state.accounts.read(&secret).await?;
+        if view.balance < state.min_deploy_credits {
+            return Err(AppError::DeployMinimum {
+                min_deploy_credits: state.min_deploy_credits,
+                balance: view.balance,
+                credit_url: state.accounts.credit_url(&view.account_id),
+            }
+            .into());
+        }
+    }
     let function = FunctionId::new(&name).map_err(application::AppError::from)?;
     let egress_allow = parse_allow_headers(&headers)?;
     let response = state
@@ -274,6 +301,31 @@ mod tests {
         }
     }
 
+    struct IdleSettler;
+
+    #[async_trait]
+    impl application::ports::CreditSettler for IdleSettler {
+        async fn challenge(
+            &self,
+            _: &domain::AccountId,
+            _: u64,
+        ) -> Result<application::ports::PaymentChallenge, AppError> {
+            Err(AppError::Storage("settler unused".into()))
+        }
+        async fn settle(&self, _: &domain::AccountId, _: u64, _: &str) -> Result<String, AppError> {
+            Err(AppError::Storage("settler unused".into()))
+        }
+    }
+
+    fn accounts_for(ledger: Arc<crate::testutil::MemLedger>) -> Arc<Accounts> {
+        Arc::new(Accounts::new(
+            ledger,
+            Arc::new(IdleSettler),
+            "",
+            "http://api.test",
+        ))
+    }
+
     fn publish_app() -> (Router, Arc<MemCatalog>) {
         let catalog = Arc::new(MemCatalog::new());
         let usecase = Arc::new(PublishFunction::new(
@@ -282,7 +334,14 @@ mod tests {
             Arc::new(MemLock::new()),
             Arc::new(AcceptingRunner),
         ));
-        (publish_router(usecase), catalog)
+        (
+            publish_router(
+                usecase,
+                accounts_for(Arc::new(crate::testutil::MemLedger::new())),
+                0,
+            ),
+            catalog,
+        )
     }
 
     fn put(body: &'static [u8]) -> Request<Body> {
@@ -302,12 +361,13 @@ mod tests {
             Arc::new(MemLock::sticky()),
             Arc::new(AcceptingRunner),
         ));
-        let first = publish_router(usecase.clone())
+        let accounts = accounts_for(Arc::new(crate::testutil::MemLedger::new()));
+        let first = publish_router(usecase.clone(), accounts.clone(), 0)
             .oneshot(put(b"\0asm one"))
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
-        let second = publish_router(usecase)
+        let second = publish_router(usecase, accounts, 0)
             .oneshot(put(b"\0asm two"))
             .await
             .unwrap();
@@ -370,5 +430,81 @@ mod tests {
         let res = app.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert!(catalog.rows.lock().unwrap().is_empty());
+    }
+
+    async fn funded(balance: u64) -> (Arc<crate::testutil::MemLedger>, String) {
+        use application::ports::AccountStore;
+        use domain::{Account, NewKey};
+        let ledger = Arc::new(crate::testutil::MemLedger::new());
+        let account = Account::open().unwrap();
+        let issued = NewKey::issue(account.id.clone(), None).unwrap();
+        let secret = issued.secret.as_str().to_string();
+        ledger.create(&account, &issued.record).await.unwrap();
+        if balance > 0 {
+            ledger.admin_credit(&account.id, balance).await.unwrap();
+        }
+        (ledger, secret)
+    }
+
+    fn put_bearer(secret: &str) -> Request<Body> {
+        Request::builder()
+            .method("PUT")
+            .uri("/functions/echo")
+            .header("content-type", "application/wasm")
+            .header("authorization", format!("Bearer {secret}"))
+            .body(Body::from(b"\0asm one".as_slice()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deploy_minimum_met_stores_function_without_debit() {
+        let (ledger, secret) = funded(5).await;
+        let catalog = Arc::new(MemCatalog::new());
+        let usecase = Arc::new(PublishFunction::new(
+            Arc::new(MemArtifacts),
+            catalog.clone(),
+            Arc::new(MemLock::new()),
+            Arc::new(AcceptingRunner),
+        ));
+        let app = publish_router(usecase, accounts_for(ledger.clone()), 5);
+        let res = app.oneshot(put_bearer(&secret)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(catalog.rows.lock().unwrap().contains_key("echo"));
+        let stored = {
+            use application::ports::AccountStore;
+            let hash = domain::SecretHash::of(&domain::BearerSecret::parse(&secret).unwrap());
+            ledger.key_by_hash(&hash).await.unwrap().unwrap().account_id
+        };
+        let account = {
+            use application::ports::AccountStore;
+            ledger.account(&stored).await.unwrap().unwrap()
+        };
+        assert_eq!(account.balance, 5);
+    }
+
+    #[tokio::test]
+    async fn deploy_minimum_missed_does_not_store() {
+        let (ledger, secret) = funded(4).await;
+        let catalog = Arc::new(MemCatalog::new());
+        let usecase = Arc::new(PublishFunction::new(
+            Arc::new(MemArtifacts),
+            catalog.clone(),
+            Arc::new(MemLock::new()),
+            Arc::new(AcceptingRunner),
+        ));
+        let app = publish_router(usecase, accounts_for(ledger.clone()), 5);
+        let res = app.oneshot(put_bearer(&secret)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PAYMENT_REQUIRED);
+        assert!(catalog.rows.lock().unwrap().is_empty());
+        let stored = {
+            use application::ports::AccountStore;
+            let hash = domain::SecretHash::of(&domain::BearerSecret::parse(&secret).unwrap());
+            ledger.key_by_hash(&hash).await.unwrap().unwrap().account_id
+        };
+        let account = {
+            use application::ports::AccountStore;
+            ledger.account(&stored).await.unwrap().unwrap()
+        };
+        assert_eq!(account.balance, 4);
     }
 }

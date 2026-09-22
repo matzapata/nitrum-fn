@@ -6,4 +6,7 @@ locals {
   artifacts_bucket_name   = var.artifacts_bucket_name
   catalog_table_name      = var.catalog_table_name
   publish_lock_table_name = var.publish_lock_table_name
+  accounts_table_name     = var.accounts_table_name
+  keys_table_name         = var.keys_table_name
+  receipts_table_name     = var.receipts_table_name
 }

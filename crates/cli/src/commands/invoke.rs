@@ -50,6 +50,9 @@ pub struct InvokeArgs {
         requires = "pcr0"
     )]
     pub attestation_out: Option<PathBuf>,
+    /// Bearer key. Sent as `Authorization: Bearer`. No payment signature.
+    #[arg(long, env = "NITRUM_FN_API_KEY", value_name = "NFK")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -89,6 +92,7 @@ pub async fn run(args: InvokeArgs) -> Result<()> {
     if let Some(ref nonce) = nonce {
         request = request.header(NONCE_HEADER, BASE64.encode(nonce));
     }
+    request = with_bearer(request, args.api_key.as_deref());
 
     let response = request
         .send()
@@ -152,6 +156,14 @@ pub async fn run(args: InvokeArgs) -> Result<()> {
 
     println!("{body}");
     Ok(())
+}
+
+fn with_bearer(request: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
+    if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
+        request.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"))
+    } else {
+        request
+    }
 }
 
 fn resolve_fn_shasum(raw: Option<&str>) -> Result<Option<String>> {
@@ -265,6 +277,38 @@ mod tests {
     fn rejects_invalid_fn_shasum() {
         let err = resolve_fn_shasum(Some("not-a-hash")).unwrap_err();
         assert!(err.to_string().contains("invalid --fn-shasum"));
+    }
+
+    #[tokio::test]
+    async fn sends_bearer_and_no_payment_signature() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captured = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            use tokio::io::AsyncReadExt;
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let request = with_bearer(
+            client
+                .post(format!("http://{addr}/invoke/echo"))
+                .header("content-type", "application/json")
+                .body("{}"),
+            Some("nfk_test"),
+        );
+        let _ = request.send().await;
+
+        let raw = captured.await.unwrap();
+        let lower = raw.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer nfk_test"), "{raw}");
+        assert!(!lower.contains("payment-signature"), "{raw}");
+        assert!(!lower.contains("x-payment"), "{raw}");
     }
 
     #[test]

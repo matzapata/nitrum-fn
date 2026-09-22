@@ -7,9 +7,10 @@ mod state;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use accounts::DynamoAccountStore;
 use anyhow::{Context, Result};
 use application::ports::{ArtifactStore, FunctionAttestor, FunctionCatalog, FunctionRunner};
-use application::InvokeFunction;
+use application::{InvokeFunction, PaidInvoke};
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
@@ -42,7 +43,7 @@ async fn main() -> Result<()> {
 
     // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
-        ddb,
+        ddb.clone(),
         config.catalog.table.clone(),
     ));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
@@ -61,8 +62,24 @@ async fn main() -> Result<()> {
         Arc::new(NitrumCryptoAttestor::new().context("nitrum crypto attestor")?)
     };
 
-    // Build invoke usecase.
-    let invoke = Arc::new(InvokeFunction::new(catalog, artifacts, runner));
+    let account_endpoint = config
+        .accounts
+        .endpoint
+        .as_deref()
+        .or(config.catalog.endpoint.as_deref());
+    let accounts = Arc::new(DynamoAccountStore::new(
+        build_ddb_client(&sdk, account_endpoint)?,
+        config.accounts.table.clone(),
+        config.accounts.keys_table.clone(),
+        config.accounts.receipts_table.clone(),
+    ));
+    // Debit before InvokeFunction::execute. Cost zero skips the bearer.
+    let invoke = Arc::new(PaidInvoke::new(
+        config.billing.invoke_credit_cost,
+        config.billing.api_public_url.clone(),
+        accounts,
+        InvokeFunction::new(catalog, artifacts, runner),
+    ));
 
     // Build HTTP router.
     let app = http::router(AppState { invoke, attestor });

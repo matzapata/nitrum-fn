@@ -58,6 +58,26 @@ variable "publish_lock_table_arn" {
   description = "ARN of the publish lock table."
 }
 
+variable "accounts_table_arn" {
+  type        = string
+  description = "ARN of the invoke-credit accounts table."
+}
+
+variable "keys_table_arn" {
+  type        = string
+  description = "ARN of the bearer-keys table."
+}
+
+variable "keys_index_arn" {
+  type        = string
+  description = "ARN of the keys account_id GSI."
+}
+
+variable "receipts_table_arn" {
+  type        = string
+  description = "ARN of the credit-receipt table."
+}
+
 variable "image" {
   type        = string
   description = "Full container image URI for nitrum-fn-api (registry/repo:tag). Must exist and be pullable by Fargate (public GHCR/Docker Hub, or a registry ECS can authenticate to)."

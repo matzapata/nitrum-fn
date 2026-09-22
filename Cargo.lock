@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "accounts"
+version = "0.1.0"
+dependencies = [
+ "application",
+ "async-trait",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-smithy-http-client",
+ "domain",
+ "tokio",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -92,6 +105,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "accounts",
  "anyhow",
  "application",
  "artifacts",
@@ -101,10 +115,12 @@ dependencies = [
  "aws-sdk-s3",
  "aws-smithy-http-client",
  "axum",
+ "base64",
  "catalog",
  "config",
  "domain",
  "executor",
+ "payments",
  "serde",
  "serde_json",
  "telemetry",
@@ -908,9 +924,11 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "idna_adapter",
+ "k256",
  "reqwest",
  "serde",
  "serde_json",
+ "sha3",
  "tokio",
  "toml",
  "tracing",
@@ -1393,6 +1411,7 @@ dependencies = [
 name = "domain"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "hex",
  "serde",
  "sha2 0.10.9",
@@ -1850,6 +1869,7 @@ dependencies = [
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "accounts",
  "anyhow",
  "application",
  "artifacts",
@@ -1869,6 +1889,7 @@ dependencies = [
  "serde",
  "telemetry",
  "tokio",
+ "tower 0.5.3",
  "tower-http",
  "tracing",
 ]
@@ -2169,6 +2190,29 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "k256"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+dependencies = [
+ "cfg-if",
+ "ecdsa",
+ "elliptic-curve",
+ "once_cell",
+ "sha2 0.10.9",
+ "signature",
+]
+
+[[package]]
+name = "keccak"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
+dependencies = [
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -2519,6 +2563,21 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
+name = "payments"
+version = "0.1.0"
+dependencies = [
+ "application",
+ "async-trait",
+ "base64",
+ "domain",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
 
 [[package]]
 name = "pem-rfc7468"
@@ -3302,6 +3361,16 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest 0.10.7",
+ "keccak",
 ]
 
 [[package]]

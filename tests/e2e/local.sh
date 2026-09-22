@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end: Floci → api + host → nitrum-fn new → build → deploy → invoke.
+# End-to-end: Floci → api + host → nitrum-fn new → build → account → deploy → invoke.
+#
+# Local YAML leaves billing at zero. This script turns it on (cost 1) and funds
+# the account with the operator admin-credit route. It does not call the facilitator.
 #
 # Environment (optional; `set -a && source .env && set +a` — see .env.example):
 #   NITRUM_FN_BIN / NITRUM_FN_E2E_RUST_LOG
@@ -34,6 +37,11 @@ AWS_REGION=us-east-1
 AWS_DEFAULT_REGION=us-east-1
 AWS_ACCESS_KEY_ID=test
 AWS_SECRET_ACCESS_KEY=test
+AWS_EC2_METADATA_DISABLED=true
+OPERATOR_TOKEN=dev
+DEPLOY_MIN=1
+INVOKE_COST=1
+GRANT_INVOKES=2
 
 e2e_init_workspace
 
@@ -100,6 +108,9 @@ wait_healthz() {
 
 common_env() {
     export NITRUM_FN_ENV AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    export AWS_EC2_METADATA_DISABLED
+    # A developer shell may export these. PCR0 makes invoke require attestation.
+    unset NITRUM_FN_PCR0 NITRUM_FN_API_KEY
 }
 
 log_step "prepare data dir"
@@ -126,13 +137,16 @@ if ! cargo build -p api -p host -p cli; then
 fi
 log_ok "binaries ready"
 
-log_step "start api on :${API_PORT} (publish + catalog)"
+log_step "start api on :${API_PORT} (publish minimum ${DEPLOY_MIN})"
 NITRUM_FN_SERVER__PORT="${API_PORT}" \
+NITRUM_FN_BILLING__MIN_DEPLOY_CREDITS="${DEPLOY_MIN}" \
+NITRUM_FN_OPERATOR_TOKEN="${OPERATOR_TOKEN}" \
     cargo run -p api >"${API_LOG}" 2>&1 &
 API_PID=$!
 
-log_step "start host on :${HOST_PORT} (invoke)"
+log_step "start host on :${HOST_PORT} (invoke cost ${INVOKE_COST})"
 NITRUM_FN_SERVER__PORT="${HOST_PORT}" \
+NITRUM_FN_BILLING__INVOKE_CREDIT_COST="${INVOKE_COST}" \
     cargo run -p host >"${HOST_LOG}" 2>&1 &
 HOST_PID=$!
 
@@ -144,10 +158,69 @@ log_ok "host healthy"
 
 step_scaffold_and_build
 
+http_code() {
+    local body_file="$1"
+    shift
+    curl -sS -o "${body_file}" -w '%{http_code}' "$@"
+}
+
+expect_status() {
+    local want="$1"
+    local body_file="${DATA_DIR}/http.body"
+    shift
+    local code
+    code="$(http_code "${body_file}" "$@")" || { dump_logs; die "curl failed"; }
+    [[ "${code}" == "${want}" ]] || {
+        dump_logs
+        die "expected HTTP ${want}, got ${code}: $(cat "${body_file}")"
+    }
+}
+
+account_balance() {
+    local body
+    body="$(curl -sf "${API_URL}/accounts/${ACCOUNT_ID}" \
+        -H "authorization: Bearer ${SECRET}")" \
+        || { dump_logs; die "GET account failed"; }
+    printf '%s' "${body}" | sed -n 's/.*"balance":\([0-9]*\).*/\1/p'
+}
+
+log_step "account create"
+create_out="$(cli account create --url "${API_URL}")" \
+    || { dump_logs; die "account create failed"; }
+ACCOUNT_ID="$(printf '%s\n' "${create_out}" | awk -F= '/^account_id=/{print $2}')"
+SECRET="$(printf '%s\n' "${create_out}" | awk -F= '/^secret=/{print $2}')"
+[[ -n "${ACCOUNT_ID}" && -n "${SECRET}" ]] || die "account create output: ${create_out}"
+log_ok "account ${ACCOUNT_ID}"
+
+log_step "deploy without a bearer → 401"
+before="$(curl -sS -w '\n%{http_code}' "${API_URL}/functions/${NAME}" || true)"
+expect_status 401 -X PUT --data-binary @"${WASM_SRC}" \
+    -H 'content-type: application/wasm' \
+    "${API_URL}/functions/${NAME}"
+after="$(curl -sS -w '\n%{http_code}' "${API_URL}/functions/${NAME}" || true)"
+[[ "${before}" == "${after}" ]] || die "unauthenticated deploy changed the catalog"
+log_ok "deploy rejected"
+
+log_step "invoke without a bearer → 401"
+expect_status 401 -X POST \
+    -H 'content-type: application/json' \
+    -d '{}' \
+    "${HOST_URL}/invoke/${NAME}"
+log_ok "invoke rejected"
+
+log_step "admin credit ${GRANT_INVOKES} invokes"
+expect_status 200 -X POST "${API_URL}/accounts/${ACCOUNT_ID}/admin-credit" \
+    -H "authorization: Bearer ${OPERATOR_TOKEN}" \
+    -H 'content-type: application/json' \
+    -d "{\"invokes\":${GRANT_INVOKES}}"
+log_ok "funded"
+
 log_step "CLI deploy ${NAME}"
-cli deploy "${WASM_SRC}" --name "${NAME}" --url "${API_URL}" \
+cli deploy "${WASM_SRC}" --name "${NAME}" --url "${API_URL}" --api-key "${SECRET}" \
     || { dump_logs; die "deploy failed"; }
-log_ok "deployed ${NAME}"
+balance="$(account_balance)"
+[[ "${balance}" == "${GRANT_INVOKES}" ]] || die "deploy debited the balance (got ${balance})"
+log_ok "deployed ${NAME} (balance still ${balance})"
 
 log_step "GET /functions/${NAME}"
 meta="$(curl -sf "${API_URL}/functions/${NAME}")" \
@@ -158,10 +231,14 @@ log_ok "function metadata"
 log_step "CLI invoke --fn-shasum"
 err="${DATA_DIR}/invoke.err"
 body="$(cli invoke "${NAME}" --url "${HOST_URL}" -d '{}' \
-    --fn-shasum "${HASH}" 2>"${err}")" \
+    --fn-shasum "${HASH}" --api-key "${SECRET}" 2>"${err}")" \
     || { dump_logs; cat "${err}" >&2 || true; die "invoke failed"; }
 
 [[ "${body}" == "${EXPECTED_BODY}" ]] || die "body: ${body}"
+balance="$(account_balance)"
+expected_after="$((GRANT_INVOKES - INVOKE_COST))"
+[[ "${balance}" == "${expected_after}" ]] || die "invoke balance: got ${balance}, want ${expected_after}"
+log_ok "balance ${balance} after invoke"
 grep -q "x-nitrum-fn-shasum=${HASH}" "${err}" \
     || die "missing/mismatched shasum header (expected ${HASH}): $(cat "${err}")"
 while IFS= read -r line; do
@@ -169,13 +246,16 @@ while IFS= read -r line; do
 done < "${err}"
 log_ok "invoke after deploy (hash verified)"
 
-log_step "unknown function → 404"
+log_step "unknown function → 404 and refund"
 code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
     "${HOST_URL}/invoke/does-not-exist" \
     -H 'content-type: application/json' \
+    -H "authorization: Bearer ${SECRET}" \
     -d '{}')"
 [[ "${code}" == "404" ]] || die "expected 404 for missing fn, got ${code}"
-log_ok "missing function 404"
+balance="$(account_balance)"
+[[ "${balance}" == "${expected_after}" ]] || die "missing function kept the debit (balance ${balance})"
+log_ok "missing function 404, balance still ${balance}"
 
 dump_logs
 

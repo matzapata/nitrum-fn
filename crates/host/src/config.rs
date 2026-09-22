@@ -10,6 +10,8 @@ pub struct HostConfig {
     pub server: ServerConfig,
     pub artifacts: ArtifactsConfig,
     pub catalog: CatalogConfig,
+    pub accounts: AccountsConfig,
+    pub billing: BillingConfig,
 
     /// Overlay name that was loaded (`NITRUM_FN_ENV`, else `local`); not itself a
     /// config source, stamped on after deserializing so callers don't re-derive it.
@@ -33,6 +35,20 @@ pub struct ArtifactsConfig {
 pub struct CatalogConfig {
     pub table: String,
     pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccountsConfig {
+    pub table: String,
+    pub keys_table: String,
+    pub receipts_table: String,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BillingConfig {
+    pub invoke_credit_cost: u64,
+    pub api_public_url: String,
 }
 
 impl HostConfig {

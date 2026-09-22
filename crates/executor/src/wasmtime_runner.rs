@@ -96,11 +96,8 @@ impl WasmtimeRunner {
             return Ok(module);
         }
         let module =
-            Module::new(&self.engine, wasm).map_err(|e| AppError::Invoke(e.to_string()))?;
-        assert_abi(&module).map_err(|e| match e {
-            AppError::Compile(msg) => AppError::Invoke(msg),
-            other => other,
-        })?;
+            Module::new(&self.engine, wasm).map_err(|e| AppError::Compile(e.to_string()))?;
+        assert_abi(&module)?;
         self.modules
             .lock()
             .map_err(|_| AppError::Invoke("module cache poisoned".into()))?
@@ -805,6 +802,19 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "validate must not instantiate (start)"
         );
+    }
+
+    #[tokio::test]
+    async fn compile_failure_is_not_a_guest_trap() {
+        let runner = WasmtimeRunner::new().expect("engine");
+        let wasm = b"not a wasm module";
+        let hash = ContentHash::from_bytes(wasm);
+        let err = runner
+            .run(&hash, wasm, b"x", NO_EGRESS)
+            .await
+            .expect_err("compile");
+        assert!(matches!(err, AppError::Compile(_)), "{err}");
+        assert!(!matches!(err, AppError::Trap(_)));
     }
 
     #[tokio::test]

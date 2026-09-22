@@ -27,7 +27,7 @@ Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 | `make audit`              | `cargo audit`                                       |
 | `make test`               | `cargo test --workspace --lib --bins`               |
 | `make adapters`           | Floci + catalog/artifacts integration tests         |
-| `bash tests/e2e/local.sh` | local publish + invoke                              |
+| `bash tests/e2e/local.sh` | local billed publish + invoke (admin credit)        |
 | `make ci`                 | `check` + `audit` + `test` + `adapters` + local e2e |
 
 ## Local stack

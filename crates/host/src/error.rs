@@ -12,6 +12,16 @@ struct ErrorBody {
     error: String,
 }
 
+#[derive(Serialize)]
+struct CreditsBody {
+    error: String,
+    credit_cost: u64,
+    balance: u64,
+    credit_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spend_cap_remaining: Option<u64>,
+}
+
 impl From<AppError> for HttpError {
     fn from(value: AppError) -> Self {
         Self(value)
@@ -20,9 +30,26 @@ impl From<AppError> for HttpError {
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
+        if let AppError::InsufficientCredits {
+            credit_cost,
+            balance,
+            credit_url,
+            spend_cap_remaining,
+        } = &self.0
+        {
+            let body = Json(CreditsBody {
+                error: "insufficient invoke credits".into(),
+                credit_cost: *credit_cost,
+                balance: *balance,
+                credit_url: credit_url.clone(),
+                spend_cap_remaining: *spend_cap_remaining,
+            });
+            return (StatusCode::PAYMENT_REQUIRED, body).into_response();
+        }
         let status = match &self.0 {
             AppError::NotFound(_) | AppError::ArtifactMissing(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Domain(_)
             | AppError::HashMismatch { .. }
             | AppError::BadRequest(_)
@@ -32,7 +59,10 @@ impl IntoResponse for HttpError {
             AppError::Invoke(_)
             | AppError::Trap(_)
             | AppError::Storage(_)
-            | AppError::Attestation(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | AppError::Attestation(_)
+            | AppError::DeployMinimum { .. }
+            | AppError::PaymentChallenge { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::InsufficientCredits { .. } => unreachable!(),
         };
         if self.0.is_internal() {
             tracing::error!(error = %self.0, "request failed");

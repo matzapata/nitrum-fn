@@ -9,6 +9,11 @@ pub struct ApiConfig {
     pub server: ServerConfig,
     pub artifacts: ArtifactsConfig,
     pub catalog: CatalogConfig,
+    pub accounts: AccountsConfig,
+    pub billing: BillingConfig,
+    /// `NITRUM_FN_OPERATOR_TOKEN`. Empty rejects every admin credit.
+    #[serde(default)]
+    pub operator_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,6 +33,25 @@ pub struct CatalogConfig {
     pub table: String,
     pub publish_lock_table: String,
     pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccountsConfig {
+    pub table: String,
+    pub keys_table: String,
+    pub receipts_table: String,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BillingConfig {
+    pub usdc_per_invoke: u64,
+    pub min_deploy_credits: u64,
+    pub pay_to: String,
+    pub asset: String,
+    pub network: String,
+    pub facilitator_url: String,
+    pub api_public_url: String,
 }
 
 impl ApiConfig {

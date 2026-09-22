@@ -65,13 +65,21 @@ async fn invoke(
     let payload = encode_request(&fn_req)
         .map_err(|e| application::AppError::Invoke(format!("encode request: {e}")))?;
 
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim);
     let response = state
         .invoke
-        .execute(InvokeRequest {
-            function,
-            version,
-            payload,
-        })
+        .execute(
+            bearer,
+            InvokeRequest {
+                function,
+                version,
+                payload,
+            },
+        )
         .await?;
 
     let fn_res = decode_response(&response.output)
@@ -177,5 +185,313 @@ mod tests {
             "{:?}",
             err.0
         );
+    }
+
+    #[test]
+    fn host_crate_does_not_depend_on_payments() {
+        let manifest = include_str!("../Cargo.toml");
+        assert!(
+            !manifest.lines().any(|line| {
+                let trimmed = line.trim();
+                trimmed.starts_with("payments") || trimmed.contains("crates/payments")
+            }),
+            "{manifest}"
+        );
+    }
+
+    mod router {
+        use super::super::*;
+        use application::ports::{
+            AccountStore, ArtifactStore, CreditOutcome, DebitReceipt, FunctionCatalog,
+            FunctionRunner, RunOutcome, StoreError,
+        };
+        use application::{InvokeFunction, PaidInvoke};
+        use async_trait::async_trait;
+        use axum::body::{to_bytes, Body};
+        use axum::http::Request;
+        use domain::{Account, AccountId, FunctionVersion, KeyId, KeyMeta, KeyRecord, NewKey};
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use tower::ServiceExt;
+
+        struct Ledger {
+            account: Mutex<Account>,
+            key: Mutex<KeyRecord>,
+            hash: domain::SecretHash,
+        }
+
+        impl Ledger {
+            fn open(balance: u64) -> (Self, String) {
+                let account = Account {
+                    id: AccountId::generate().unwrap(),
+                    balance,
+                };
+                let issued = NewKey::issue(account.id.clone(), None).unwrap();
+                let secret = issued.secret.as_str().to_string();
+                (
+                    Self {
+                        hash: issued.record.secret_hash.clone(),
+                        account: Mutex::new(account),
+                        key: Mutex::new(issued.record),
+                    },
+                    secret,
+                )
+            }
+        }
+
+        #[async_trait]
+        impl AccountStore for Ledger {
+            async fn create(&self, _: &Account, _: &KeyRecord) -> Result<(), StoreError> {
+                unimplemented!()
+            }
+            async fn put_key(&self, _: &KeyRecord) -> Result<(), StoreError> {
+                unimplemented!()
+            }
+            async fn revoke(&self, _: &AccountId, _: &KeyId) -> Result<(), StoreError> {
+                unimplemented!()
+            }
+            async fn key_by_hash(
+                &self,
+                _: &domain::SecretHash,
+            ) -> Result<Option<KeyRecord>, StoreError> {
+                Ok(Some(self.key.lock().unwrap().clone()))
+            }
+            async fn account(&self, _: &AccountId) -> Result<Option<Account>, StoreError> {
+                Ok(Some(self.account.lock().unwrap().clone()))
+            }
+            async fn list_keys(&self, _: &AccountId) -> Result<Vec<KeyMeta>, StoreError> {
+                Ok(vec![])
+            }
+            async fn debit(
+                &self,
+                hash: &domain::SecretHash,
+                cost: u64,
+            ) -> Result<DebitReceipt, StoreError> {
+                if hash != &self.hash {
+                    return Err(StoreError::Unauthorized);
+                }
+                let mut account = self.account.lock().unwrap();
+                if account.balance < cost {
+                    return Err(StoreError::Insufficient {
+                        account_id: account.id.clone(),
+                        balance: account.balance,
+                        cost,
+                        spend_cap_remaining: None,
+                    });
+                }
+                account.balance -= cost;
+                Ok(DebitReceipt {
+                    secret_hash: hash.clone(),
+                    account_id: account.id.clone(),
+                    cost,
+                    capped: false,
+                })
+            }
+            async fn refund(&self, receipt: &DebitReceipt) -> Result<(), StoreError> {
+                self.account.lock().unwrap().balance += receipt.cost;
+                Ok(())
+            }
+            async fn credit(
+                &self,
+                _: &AccountId,
+                _: u64,
+                _: &str,
+            ) -> Result<CreditOutcome, StoreError> {
+                unimplemented!()
+            }
+            async fn admin_credit(&self, _: &AccountId, _: u64) -> Result<u64, StoreError> {
+                unimplemented!()
+            }
+        }
+
+        struct FixedCatalog {
+            version: FunctionVersion,
+        }
+
+        #[async_trait]
+        impl FunctionCatalog for FixedCatalog {
+            async fn upsert(
+                &self,
+                _: &FunctionId,
+                _: &VersionLabel,
+                _: ContentHash,
+                _: u64,
+                _: &[domain::EgressOrigin],
+            ) -> Result<bool, application::AppError> {
+                Ok(true)
+            }
+            async fn resolve(
+                &self,
+                _: &FunctionId,
+                _: &VersionLabel,
+            ) -> Result<FunctionVersion, application::AppError> {
+                Ok(self.version.clone())
+            }
+            async fn list(&self) -> Result<Vec<FunctionVersion>, application::AppError> {
+                Ok(vec![])
+            }
+        }
+
+        struct Wasm(Vec<u8>);
+
+        #[async_trait]
+        impl ArtifactStore for Wasm {
+            async fn put(&self, wasm: &[u8]) -> Result<ContentHash, application::AppError> {
+                Ok(ContentHash::from_bytes(wasm))
+            }
+            async fn get(&self, hash: &ContentHash) -> Result<Vec<u8>, application::AppError> {
+                let actual = ContentHash::from_bytes(&self.0);
+                if &actual != hash {
+                    return Err(application::AppError::HashMismatch {
+                        expected: hash.to_hex(),
+                        actual: actual.to_hex(),
+                    });
+                }
+                Ok(self.0.clone())
+            }
+        }
+
+        struct Runner {
+            body: Vec<u8>,
+        }
+
+        #[async_trait]
+        impl FunctionRunner for Runner {
+            async fn validate(&self, _: &[u8]) -> Result<(), application::AppError> {
+                Ok(())
+            }
+            async fn run(
+                &self,
+                _: &ContentHash,
+                _: &[u8],
+                _: &[u8],
+                _: &[domain::EgressOrigin],
+            ) -> Result<RunOutcome, application::AppError> {
+                let b64 = BASE64.encode(&self.body);
+                let wire = format!(r#"{{"status":200,"headers":[],"body_base64":"{b64}"}}"#);
+                Ok(RunOutcome {
+                    output: wire.into_bytes(),
+                })
+            }
+        }
+
+        struct RecAttestor {
+            user_data: Mutex<Option<Vec<u8>>>,
+        }
+
+        #[async_trait]
+        impl application::ports::FunctionAttestor for RecAttestor {
+            async fn attest(
+                &self,
+                user_data: &[u8],
+                _: &[u8],
+            ) -> Result<Option<Vec<u8>>, application::AppError> {
+                *self.user_data.lock().unwrap() = Some(user_data.to_vec());
+                Ok(Some(b"doc".to_vec()))
+            }
+        }
+
+        fn app(balance: u64) -> (axum::Router, Arc<RecAttestor>, String, ContentHash, Vec<u8>) {
+            let wasm = b"\0asm billed".to_vec();
+            let hash = ContentHash::from_bytes(&wasm);
+            let body = br#"{"ok":true}"#.to_vec();
+            let (ledger, secret) = Ledger::open(balance);
+            let paid = PaidInvoke::new(
+                1,
+                "http://api.test",
+                Arc::new(ledger),
+                InvokeFunction::new(
+                    Arc::new(FixedCatalog {
+                        version: FunctionVersion {
+                            id: FunctionId::new("echo").unwrap(),
+                            label: VersionLabel::latest(),
+                            content_hash: hash.clone(),
+                            egress_allow: vec![],
+                        },
+                    }),
+                    Arc::new(Wasm(wasm)),
+                    Arc::new(Runner { body: body.clone() }),
+                ),
+            );
+            let attestor = Arc::new(RecAttestor {
+                user_data: Mutex::new(None),
+            });
+            let router = router(crate::state::AppState {
+                invoke: Arc::new(paid),
+                attestor: attestor.clone(),
+            });
+            (router, attestor, secret, hash, body)
+        }
+
+        #[tokio::test]
+        async fn billed_success_attests_wasm_and_body_only() {
+            let (app, attestor, secret, hash, body) = app(1);
+            let nonce = BASE64.encode([7u8; 16]);
+            let res = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/invoke/echo")
+                        .header("authorization", format!("Bearer {secret}"))
+                        .header(NONCE_HEADER, nonce)
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let seen = attestor
+                .user_data
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("attested");
+            assert_eq!(seen, invoke_user_data(&hash, &body));
+            assert_eq!(seen.len(), 64);
+        }
+
+        #[tokio::test]
+        async fn insufficient_credits_are_json_402_without_x402() {
+            let (app, attestor, secret, _, _) = app(0);
+            let res = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/invoke/echo")
+                        .header("authorization", format!("Bearer {secret}"))
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::PAYMENT_REQUIRED);
+            assert!(res.headers().get("payment-required").is_none());
+            assert!(res.headers().get("x-payment").is_none());
+            assert!(res.headers().get("payment-signature").is_none());
+            let bytes = to_bytes(res.into_body(), 4096).await.unwrap();
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(text.contains("\"credit_cost\":1"), "{text}");
+            assert!(text.contains("\"balance\":0"), "{text}");
+            assert!(text.contains("/accounts/"), "{text}");
+            assert!(text.contains("/credit"), "{text}");
+            assert!(!text.contains("spend_cap_remaining"), "{text}");
+            assert!(attestor.user_data.lock().unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn missing_bearer_is_401() {
+            let (app, _, _, _, _) = app(1);
+            let res = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/invoke/echo")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 }

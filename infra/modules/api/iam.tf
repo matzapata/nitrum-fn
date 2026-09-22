@@ -73,6 +73,39 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
+    sid    = "AccountsReadWrite"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [var.accounts_table_arn]
+  }
+
+  statement {
+    sid    = "KeysReadWrite"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+    ]
+    resources = [var.keys_table_arn, var.keys_index_arn]
+  }
+
+  statement {
+    sid    = "CreditReceiptsReadWrite"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+    ]
+    resources = [var.receipts_table_arn]
+  }
+
+  statement {
     sid    = "OtelCloudWatchLogs"
     effect = "Allow"
     actions = [
@@ -111,4 +144,26 @@ resource "aws_iam_role_policy" "task" {
   name   = "NitrumFnApiStore"
   role   = aws_iam_role.task.id
   policy = data.aws_iam_policy_document.task.json
+}
+
+locals {
+  api_task_statements = jsondecode(data.aws_iam_policy_document.task.json).Statement
+  api_accounts_actions = one([
+    for s in local.api_task_statements : s.Action if s.Sid == "AccountsReadWrite"
+  ])
+  api_receipt_actions = one([
+    for s in local.api_task_statements : s.Action if s.Sid == "CreditReceiptsReadWrite"
+  ])
+}
+
+check "api_ledger_read_write" {
+  assert {
+    condition = (
+      contains(local.api_accounts_actions, "dynamodb:GetItem") &&
+      contains(local.api_accounts_actions, "dynamodb:PutItem") &&
+      contains(local.api_accounts_actions, "dynamodb:UpdateItem") &&
+      contains(local.api_receipt_actions, "dynamodb:PutItem")
+    )
+    error_message = "API role must have read/write on accounts and PutItem on credit receipts."
+  }
 }

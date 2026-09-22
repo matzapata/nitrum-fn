@@ -1,5 +1,5 @@
 use clap::Parser;
-use cli::commands::{deploy, describe, invoke, new};
+use cli::commands::{account, deploy, describe, invoke, new};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -23,6 +23,8 @@ enum Commands {
     Describe(describe::DescribeArgs),
     /// Invoke a deployed function
     Invoke(invoke::InvokeArgs),
+    /// Create a funded account or buy invoke credits
+    Account(account::AccountArgs),
 }
 
 #[tokio::main]
@@ -36,6 +38,7 @@ async fn main() {
         Commands::Deploy(args) => deploy::run(args).await,
         Commands::Describe(args) => describe::run(args).await,
         Commands::Invoke(args) => invoke::run(args).await,
+        Commands::Account(args) => account::run(args).await,
     };
 
     if let Err(e) = result {
@@ -173,6 +176,77 @@ mod tests {
         assert!(
             msg.contains("fn-shasum") || msg.contains("--fn-shasum"),
             "{msg}"
+        );
+    }
+
+    #[test]
+    fn parses_account_create_and_credit() {
+        let cli = Cli::try_parse_from(["nitrum-fn", "account", "create"]).expect("parse");
+        match cli.command {
+            Commands::Account(args) => match args.command {
+                account::AccountCommand::Create(args) => {
+                    assert_eq!(args.url, "http://127.0.0.1:8080");
+                }
+                _ => panic!("expected create"),
+            },
+            _ => panic!("expected account"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "nitrum-fn",
+            "account",
+            "credit",
+            "--account",
+            "abc",
+            "--invokes",
+            "4",
+        ])
+        .expect("parse");
+        match cli.command {
+            Commands::Account(args) => match args.command {
+                account::AccountCommand::Credit(args) => {
+                    assert_eq!(args.account, "abc");
+                    assert_eq!(args.invokes, 4);
+                    assert!(args.private_key.is_none());
+                }
+                _ => panic!("expected credit"),
+            },
+            _ => panic!("expected account"),
+        }
+    }
+
+    #[test]
+    fn parses_invoke_api_key() {
+        let cli = Cli::try_parse_from([
+            "nitrum-fn",
+            "invoke",
+            "echo",
+            "--fn-shasum",
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+            "--api-key",
+            "nfk_test",
+        ])
+        .expect("parse");
+        match cli.command {
+            Commands::Invoke(args) => assert_eq!(args.api_key.as_deref(), Some("nfk_test")),
+            _ => panic!("expected invoke"),
+        }
+    }
+
+    #[test]
+    fn invoke_api_key_defaults_from_env() {
+        let cmd = Cli::command();
+        let invoke = cmd.find_subcommand("invoke").expect("invoke");
+        let api_key = invoke
+            .get_arguments()
+            .find(|a| a.get_id() == "api_key")
+            .expect("api_key");
+        assert_eq!(
+            api_key
+                .get_env()
+                .map(|s| s.to_string_lossy().into_owned())
+                .as_deref(),
+            Some("NITRUM_FN_API_KEY")
         );
     }
 

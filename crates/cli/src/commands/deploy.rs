@@ -21,6 +21,9 @@ pub struct DeployArgs {
     /// Optional TOML config (`allow_urls = [...]`)
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
+    /// Bearer key. Required when the API's deploy minimum is above zero.
+    #[arg(long, env = "NITRUM_FN_API_KEY", value_name = "NFK")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +69,14 @@ pub async fn run(args: DeployArgs) -> Result<()> {
         .body(wasm);
     for origin in &allow_urls {
         request = request.header("x-nitrum-fn-allow-url", origin.as_str());
+    }
+    if let Some(key) = args
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"));
     }
 
     let response = request
@@ -132,6 +143,7 @@ mod tests {
             url: "http://127.0.0.1:8080".into(),
             allow_urls: vec!["https://example.com".into()],
             config: Some(path),
+            api_key: None,
         };
         let origins = collect_allow_urls(&args).expect("origins");
         assert_eq!(origins.len(), 2);

@@ -1,9 +1,10 @@
 mod config;
 
+use accounts::DynamoAccountStore;
 use anyhow::{Context, Result};
 use api::ApiState;
 use application::ports::{ArtifactStore, FunctionCatalog, FunctionRunner};
-use application::PublishFunction;
+use application::{Accounts, PublishFunction};
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
@@ -11,6 +12,7 @@ use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_sdk_s3::Client as S3Client;
 use catalog::{DynamoDbFunctionCatalog, DynamoDbPublishLock};
 use executor::WasmtimeRunner;
+use payments::X402Settler;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use telemetry::{env, TelemetryConfig};
@@ -32,6 +34,12 @@ async fn main() -> Result<()> {
     let sdk = load_aws_config().await;
     let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
     let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+    let account_endpoint = config
+        .accounts
+        .endpoint
+        .as_deref()
+        .or(config.catalog.endpoint.as_deref());
+    let account_ddb = build_ddb_client(&sdk, account_endpoint)?;
 
     // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
@@ -44,8 +52,29 @@ async fn main() -> Result<()> {
         config.artifacts.prefix.clone(),
     ));
     let lock = Arc::new(DynamoDbPublishLock::new(
-        ddb,
+        ddb.clone(),
         config.catalog.publish_lock_table.clone(),
+    ));
+    let account_store = Arc::new(DynamoAccountStore::new(
+        account_ddb,
+        config.accounts.table.clone(),
+        config.accounts.keys_table.clone(),
+        config.accounts.receipts_table.clone(),
+    ));
+    let settler = X402Settler::from_config(
+        &config.billing.facilitator_url,
+        config.billing.usdc_per_invoke,
+        config.billing.asset.clone(),
+        config.billing.pay_to.clone(),
+        config.billing.network.clone(),
+        config.billing.api_public_url.clone(),
+    )
+    .context("x402 settler")?;
+    let accounts = Arc::new(Accounts::new(
+        account_store,
+        Arc::new(settler),
+        config.operator_token.clone(),
+        config.billing.api_public_url.clone(),
     ));
     let runner: Arc<dyn FunctionRunner> =
         Arc::new(WasmtimeRunner::new().context("create wasmtime runner")?);
@@ -59,7 +88,12 @@ async fn main() -> Result<()> {
     ));
 
     // Build HTTP router.
-    let app = api::router(ApiState { publish, catalog });
+    let app = api::router(ApiState {
+        publish,
+        catalog,
+        accounts,
+        min_deploy_credits: config.billing.min_deploy_credits,
+    });
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await

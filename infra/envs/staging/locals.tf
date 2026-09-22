@@ -4,6 +4,9 @@ locals {
   artifacts_bucket_name   = local.shared_config.artifacts.bucket
   catalog_table_name      = local.shared_config.catalog.table
   publish_lock_table_name = local.shared_config.catalog.publish_lock_table
+  accounts_table_name     = local.shared_config.accounts.table
+  keys_table_name         = local.shared_config.accounts.keys_table
+  receipts_table_name     = local.shared_config.accounts.receipts_table
 
   eif_source_path = var.eif_source_path != "" ? var.eif_source_path : abspath("${path.module}/../../../.nitrum/artifacts/${var.project_name}.eif")
 }
