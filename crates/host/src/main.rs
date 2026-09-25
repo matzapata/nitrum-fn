@@ -38,8 +38,8 @@ async fn main() -> Result<()> {
     // Build AWS clients.
     let sdk = load_aws_config().await;
     let bucket = config.artifacts.bucket.clone();
-    let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
-    let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+    let s3 = s3_client(&sdk, config.artifacts.endpoint.as_deref());
+    let ddb = dynamodb_client(&sdk, config.catalog.endpoint.as_deref());
 
     // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         .as_deref()
         .or(config.catalog.endpoint.as_deref());
     let accounts = Arc::new(DynamoAccountStore::new(
-        build_ddb_client(&sdk, account_endpoint)?,
+        dynamodb_client(&sdk, account_endpoint),
         config.accounts.table.clone(),
         config.accounts.keys_table.clone(),
         config.accounts.receipts_table.clone(),
@@ -119,20 +119,20 @@ async fn load_aws_config() -> aws_config::SdkConfig {
         .await
 }
 
-fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<S3Client> {
+fn s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> S3Client {
     let mut builder = S3ConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
-    Ok(S3Client::from_conf(builder.build()))
+    S3Client::from_conf(builder.build())
 }
 
-fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {
+fn dynamodb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> DdbClient {
     let mut builder = aws_sdk_dynamodb::config::Builder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
-    Ok(DdbClient::from_conf(builder.build()))
+    DdbClient::from_conf(builder.build())
 }
 
 async fn shutdown_signal() {

@@ -1,4 +1,3 @@
-use aws_sdk_dynamodb::config::Builder as DdbConfigBuilder;
 use aws_sdk_dynamodb::Client;
 
 pub async fn ddb_client() -> Client {
@@ -13,7 +12,11 @@ pub async fn ddb_client() -> Client {
         .http_client(http_client)
         .load()
         .await;
-    Client::from_conf(DdbConfigBuilder::from(&sdk).endpoint_url(endpoint).build())
+    Client::from_conf(
+        aws_sdk_dynamodb::config::Builder::from(&sdk)
+            .endpoint_url(endpoint)
+            .build(),
+    )
 }
 
 pub fn unique(prefix: &str) -> String {
