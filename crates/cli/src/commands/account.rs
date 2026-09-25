@@ -1,3 +1,4 @@
+use std::io::{BufRead, IsTerminal, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -41,6 +42,13 @@ pub struct CreditArgs {
     /// EVM chain id for the USDC EIP-712 domain (Base mainnet is 8453)
     #[arg(long, default_value_t = 8453)]
     pub chain_id: u64,
+    /// Refuse to sign if the quoted price exceeds this many atomic USDC (6 decimals).
+    /// Also skips the confirmation prompt.
+    #[arg(long)]
+    pub max_usdc: Option<u64>,
+    /// Sign without asking. Prefer --max-usdc in scripts.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub async fn run(args: AccountArgs) -> Result<()> {
@@ -110,6 +118,28 @@ async fn credit(args: CreditArgs) -> Result<()> {
             challenge.pay_to
         );
     };
+    eprintln!(
+        "price: {} atomic USDC ({} USDC) to {} on {} (asset {})",
+        challenge.amount,
+        format_usdc(challenge.amount),
+        challenge.pay_to,
+        challenge.network,
+        challenge.asset
+    );
+    match price_decision(
+        challenge.amount,
+        args.max_usdc,
+        args.yes,
+        std::io::stdin().is_terminal(),
+    ) {
+        PriceDecision::Sign => {}
+        PriceDecision::Ask => {
+            if !confirm("Sign and pay? [y/N] ")? {
+                bail!("cancelled; nothing was signed");
+            }
+        }
+        PriceDecision::Refuse(reason) => bail!("{reason}; nothing was signed"),
+    }
     let valid_before = unix_now().saturating_add(600);
     let signature = x402::payment_signature(private_key, &challenge, args.chain_id, valid_before)?;
     let paid = client
@@ -126,6 +156,58 @@ async fn credit(args: CreditArgs) -> Result<()> {
         bail!("account credit failed ({status}): {}", error_text(&bytes));
     }
     print_balance(&bytes)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PriceDecision {
+    Sign,
+    Ask,
+    Refuse(String),
+}
+
+/// A price cap always applies. Without one, the caller must pass `--yes` or confirm on a terminal.
+fn price_decision(
+    amount: u64,
+    max_usdc: Option<u64>,
+    yes: bool,
+    interactive: bool,
+) -> PriceDecision {
+    if let Some(max) = max_usdc {
+        return if amount > max {
+            PriceDecision::Refuse(format!(
+                "price {amount} atomic USDC exceeds --max-usdc {max}"
+            ))
+        } else {
+            PriceDecision::Sign
+        };
+    }
+    if yes {
+        PriceDecision::Sign
+    } else if interactive {
+        PriceDecision::Ask
+    } else {
+        PriceDecision::Refuse(
+            "pass --max-usdc <atomic USDC> or --yes to sign without a prompt".into(),
+        )
+    }
+}
+
+fn format_usdc(atomic: u64) -> String {
+    format!("{}.{:06}", atomic / 1_000_000, atomic % 1_000_000)
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    eprint!("{prompt}");
+    std::io::stderr().flush().context("flush prompt")?;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("read confirmation")?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn print_balance(bytes: &[u8]) -> Result<()> {
@@ -164,6 +246,36 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_price_cap_refuses_a_higher_quote_even_with_yes() {
+        let decision = price_decision(200, Some(100), true, true);
+        assert!(matches!(decision, PriceDecision::Refuse(_)), "{decision:?}");
+    }
+
+    #[test]
+    fn a_quote_within_the_cap_signs_without_a_prompt() {
+        assert_eq!(
+            price_decision(100, Some(100), false, true),
+            PriceDecision::Sign
+        );
+    }
+
+    #[test]
+    fn without_a_cap_a_terminal_is_asked_and_a_script_is_refused() {
+        assert_eq!(price_decision(5, None, false, true), PriceDecision::Ask);
+        assert!(matches!(
+            price_decision(5, None, false, false),
+            PriceDecision::Refuse(_)
+        ));
+        assert_eq!(price_decision(5, None, true, false), PriceDecision::Sign);
+    }
+
+    #[test]
+    fn usdc_is_shown_with_six_decimals() {
+        assert_eq!(format_usdc(20_000), "0.020000");
+        assert_eq!(format_usdc(1_500_000), "1.500000");
+    }
 
     #[tokio::test]
     async fn credit_sends_invoke_count_not_a_usdc_amount() {

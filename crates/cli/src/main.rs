@@ -208,6 +208,30 @@ mod tests {
                     assert_eq!(args.account, "abc");
                     assert_eq!(args.invokes, 4);
                     assert!(args.private_key.is_none());
+                    assert!(args.max_usdc.is_none());
+                    assert!(!args.yes);
+                }
+                _ => panic!("expected credit"),
+            },
+            _ => panic!("expected account"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "nitrum-fn",
+            "account",
+            "credit",
+            "--account",
+            "abc",
+            "--invokes",
+            "4",
+            "--max-usdc",
+            "40000",
+        ])
+        .expect("parse");
+        match cli.command {
+            Commands::Account(args) => match args.command {
+                account::AccountCommand::Credit(args) => {
+                    assert_eq!(args.max_usdc, Some(40_000));
                 }
                 _ => panic!("expected credit"),
             },
