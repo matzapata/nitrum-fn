@@ -66,7 +66,4 @@ pub trait AccountStore: Send + Sync {
         invokes: u64,
         nonce: &str,
     ) -> Result<CreditOutcome, StoreError>;
-
-    /// Add invoke credits with no payment receipt. Does not change key caps.
-    async fn admin_credit(&self, account_id: &AccountId, invokes: u64) -> Result<u64, StoreError>;
 }

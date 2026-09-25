@@ -1,5 +1,5 @@
 .PHONY: lint format fmt-check check audit test adapters ci \
-	stack stack-down images api host
+	stack stack-down facilitator images api host
 
 # Override the registry/tag per target, e.g.:
 #   make api IMAGE_PREFIX=ghcr.io/you/nitrum-fn TAG=sha-1234
@@ -46,6 +46,10 @@ stack:
 
 stack-down:
 	docker compose down --remove-orphans
+
+# Mock x402 facilitator on 127.0.0.1:4402 (local.yaml points at it). Run next to the API.
+facilitator:
+	bash tests/mocks/facilitator.sh
 
 images: api host
 

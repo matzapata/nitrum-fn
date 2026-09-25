@@ -20,5 +20,6 @@ billing:
   pay_to: "0x0000000000000000000000000000000000000001"
   asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   network: base
-  facilitator_url: https://facilitator.x402.org
+  # Mock facilitator: `make facilitator` (tests/mocks/facilitator.sh). Accepts every settle.
+  facilitator_url: http://127.0.0.1:4402
   api_public_url: http://127.0.0.1:8080

@@ -189,7 +189,6 @@ Fargate composition root. Hexagonal use case: `PublishFunction`.
 | `POST` | `/accounts/{id}/keys/{key_id}/revoke` | Revoke a key. Balance stays. |
 | `GET`  | `/accounts/{id}` | Holder reads the invoke-credit balance and key metadata. No secrets. |
 | `POST` | `/accounts/{id}/credit` | Body `{ "invokes": N }`. x402 `exact` challenge for `N * usdc_per_invoke` atomic USDC to the platform `payTo`. After the facilitator settles, the balance increases by N. |
-| `POST` | `/accounts/{id}/admin-credit` | Operator token adds N invoke credits. No x402. |
 
 x402 exists only on `POST /accounts/{id}/credit`. The invoke host does not call the facilitator and does not send a payment challenge. The platform keeps the USDC. Publishers are not paid. `usdc_per_invoke` is platform config, not a request field and not a catalog price.
 

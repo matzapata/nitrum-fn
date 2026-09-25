@@ -299,9 +299,6 @@ mod tests {
             ) -> Result<CreditOutcome, StoreError> {
                 unimplemented!()
             }
-            async fn admin_credit(&self, _: &AccountId, _: u64) -> Result<u64, StoreError> {
-                unimplemented!()
-            }
         }
 
         struct FixedCatalog {

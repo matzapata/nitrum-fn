@@ -157,14 +157,4 @@ impl AccountStore for MemLedger {
         g.receipts.insert(nonce.to_string(), invokes);
         Ok(CreditOutcome::Applied { balance })
     }
-
-    async fn admin_credit(&self, account_id: &AccountId, invokes: u64) -> Result<u64, StoreError> {
-        let mut g = self.inner.lock().unwrap();
-        let account = g
-            .accounts
-            .get_mut(&account_id.to_hex())
-            .ok_or(StoreError::NotFound)?;
-        account.balance += invokes;
-        Ok(account.balance)
-    }
 }

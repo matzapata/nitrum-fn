@@ -126,7 +126,10 @@ async fn credit_does_not_refill_the_cap() {
         .create(&account, &issued.record)
         .await
         .expect("create");
-    store.admin_credit(&account.id, 5).await.expect("fund");
+    store
+        .credit(&account.id, 5, &common::unique("fund"))
+        .await
+        .expect("fund");
     store
         .debit(&issued.record.secret_hash, 2)
         .await
@@ -154,7 +157,10 @@ async fn revoke_leaves_balance_unchanged() {
         .create(&account, &issued.record)
         .await
         .expect("create");
-    store.admin_credit(&account.id, 7).await.expect("fund");
+    store
+        .credit(&account.id, 7, &common::unique("fund"))
+        .await
+        .expect("fund");
     store
         .revoke(&account.id, &issued.record.key_id)
         .await
@@ -202,7 +208,10 @@ async fn two_concurrent_one_credit_debits_when_balance_is_one() {
         .create(&account, &issued.record)
         .await
         .expect("create");
-    store.admin_credit(&account.id, 1).await.expect("fund");
+    store
+        .credit(&account.id, 1, &common::unique("fund"))
+        .await
+        .expect("fund");
 
     let hash = issued.record.secret_hash.clone();
     let a = {

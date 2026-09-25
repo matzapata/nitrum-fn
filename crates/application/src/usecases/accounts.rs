@@ -33,7 +33,6 @@ pub struct AccountView {
 pub struct Accounts {
     store: Arc<dyn AccountStore>,
     settler: Arc<dyn CreditSettler>,
-    operator_token: String,
     credit_base: String,
 }
 
@@ -41,13 +40,11 @@ impl Accounts {
     pub fn new(
         store: Arc<dyn AccountStore>,
         settler: Arc<dyn CreditSettler>,
-        operator_token: impl Into<String>,
         credit_base: impl Into<String>,
     ) -> Self {
         Self {
             store,
             settler,
-            operator_token: operator_token.into(),
             credit_base: credit_base.into().trim_end_matches('/').to_string(),
         }
     }
@@ -155,26 +152,6 @@ impl Accounts {
         Ok(outcome.balance())
     }
 
-    #[instrument(skip(self, presented_token))]
-    pub async fn admin_credit(
-        &self,
-        account_id: &AccountId,
-        invokes: u64,
-        presented_token: &str,
-    ) -> Result<u64, AppError> {
-        if !constant_time_eq(presented_token, &self.operator_token)
-            || self.operator_token.is_empty()
-        {
-            return Err(AppError::Unauthorized);
-        }
-        if invokes == 0 {
-            return Err(AppError::BadRequest(
-                "invokes must be a positive number".into(),
-            ));
-        }
-        Ok(self.store.admin_credit(account_id, invokes).await?)
-    }
-
     pub fn credit_url(&self, account_id: &AccountId) -> String {
         format!("{}/accounts/{account_id}/credit", self.credit_base)
     }
@@ -197,19 +174,6 @@ impl crate::ports::CreditOutcome {
             Self::Applied { balance } | Self::Replay { balance } => *balance,
         }
     }
-}
-
-fn constant_time_eq(left: &str, right: &str) -> bool {
-    let a = left.as_bytes();
-    let b = right.as_bytes();
-    let mut diff = a.len() ^ b.len();
-    let len = a.len().max(b.len());
-    for i in 0..len {
-        let x = a.get(i).copied().unwrap_or(0);
-        let y = b.get(i).copied().unwrap_or(0);
-        diff |= (x ^ y) as usize;
-    }
-    diff == 0
 }
 
 impl From<StoreError> for AppError {
@@ -350,19 +314,6 @@ mod tests {
             *self.credits.lock().unwrap() += 1;
             Ok(CreditOutcome::Applied { balance })
         }
-
-        async fn admin_credit(
-            &self,
-            account_id: &AccountId,
-            invokes: u64,
-        ) -> Result<u64, StoreError> {
-            let mut accounts = self.accounts.lock().unwrap();
-            let account = accounts
-                .get_mut(&account_id.to_hex())
-                .ok_or(StoreError::NotFound)?;
-            account.balance = account.balance.saturating_add(invokes);
-            Ok(account.balance)
-        }
     }
 
     struct Settler {
@@ -402,7 +353,7 @@ mod tests {
     }
 
     fn service(store: Arc<MemStore>, settler: Arc<Settler>) -> Accounts {
-        Accounts::new(store, settler, "operator-secret", "http://api.test")
+        Accounts::new(store, settler, "http://api.test")
     }
 
     #[tokio::test]

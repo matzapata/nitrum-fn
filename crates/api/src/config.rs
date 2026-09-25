@@ -11,9 +11,6 @@ pub struct ApiConfig {
     pub catalog: CatalogConfig,
     pub accounts: AccountsConfig,
     pub billing: BillingConfig,
-    /// `NITRUM_FN_OPERATOR_TOKEN`. Empty rejects every admin credit.
-    #[serde(default)]
-    pub operator_token: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

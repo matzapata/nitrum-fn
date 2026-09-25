@@ -22,7 +22,6 @@ pub fn router(accounts: Arc<Accounts>) -> Router {
         .route("/accounts/{id}/keys", post(issue_key))
         .route("/accounts/{id}/keys/{key_id}/revoke", post(revoke_key))
         .route("/accounts/{id}/credit", post(credit))
-        .route("/accounts/{id}/admin-credit", post(admin_credit))
         .with_state(accounts)
 }
 
@@ -44,15 +43,6 @@ fn payment_header(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
-}
-
-fn operator_token(headers: &HeaderMap) -> &str {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("")
-        .trim()
 }
 
 fn account_id(raw: &str) -> Result<AccountId, HttpError> {
@@ -208,23 +198,6 @@ async fn credit(
     }))
 }
 
-async fn admin_credit(
-    State(accounts): State<Arc<Accounts>>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<InvokesBody>,
-) -> Result<impl IntoResponse, HttpError> {
-    let account_id = account_id(&id)?;
-    let balance = accounts
-        .admin_credit(&account_id, body.invokes, operator_token(&headers))
-        .await?;
-    Ok(Json(BalanceBody {
-        account_id: account_id.to_string(),
-        balance,
-        invokes: body.invokes,
-    }))
-}
-
 pub fn payment_required_name() -> HeaderName {
     HeaderName::from_static(PAYMENT_REQUIRED)
 }
@@ -244,7 +217,6 @@ mod tests {
 
     const PRICE: u64 = 10;
     const PAY_TO: &str = "0xplatform";
-    const OPERATOR: &str = "operator-secret";
 
     struct Settler;
 
@@ -276,12 +248,7 @@ mod tests {
     }
 
     fn app(ledger: Arc<MemLedger>) -> Router {
-        let accounts = Arc::new(Accounts::new(
-            ledger,
-            Arc::new(Settler),
-            OPERATOR,
-            "http://api.test",
-        ));
+        let accounts = Arc::new(Accounts::new(ledger, Arc::new(Settler), "http://api.test"));
         router(accounts)
     }
 
@@ -456,82 +423,5 @@ mod tests {
         let second = pay(ledger.clone()).await;
         assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(json(second).await["balance"], 4);
-    }
-
-    #[tokio::test]
-    async fn admin_credit_requires_operator_token_and_does_not_change_the_cap() {
-        let ledger = Arc::new(MemLedger::new());
-        let created = create(&app(ledger.clone())).await;
-        let account_id = created["account_id"].as_str().unwrap();
-        let secret = created["secret"].as_str().unwrap();
-        let issued = app(ledger.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/accounts/{account_id}/keys"))
-                    .header("authorization", format!("Bearer {secret}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"spend_cap":3}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(issued.status(), StatusCode::OK);
-
-        let missing = app(ledger.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/accounts/{account_id}/admin-credit"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"invokes":9}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-        let balance = ledger
-            .account(&AccountId::from_hex(account_id).unwrap())
-            .await
-            .unwrap()
-            .unwrap()
-            .balance;
-        assert_eq!(balance, 0);
-
-        let granted = app(ledger.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/accounts/{account_id}/admin-credit"))
-                    .header("authorization", format!("Bearer {OPERATOR}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"invokes":9}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(granted.status(), StatusCode::OK);
-        assert!(granted.headers().get(PAYMENT_REQUIRED).is_none());
-        assert_eq!(json(granted).await["balance"], 9);
-
-        let view = app(ledger)
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri(format!("/accounts/{account_id}"))
-                    .header("authorization", format!("Bearer {secret}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = json(view).await;
-        let capped = body["keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|k| k["capped"] == true)
-            .unwrap();
-        assert_eq!(capped["cap_remaining"], 3);
     }
 }

@@ -4,7 +4,7 @@ use application::ports::{AccountStore, CreditOutcome, DebitReceipt, StoreError};
 use async_trait::async_trait;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
-use aws_sdk_dynamodb::types::{AttributeValue, Put, ReturnValue, TransactWriteItem, Update};
+use aws_sdk_dynamodb::types::{AttributeValue, Put, TransactWriteItem, Update};
 use aws_sdk_dynamodb::Client;
 use domain::{Account, AccountId, KeyId, KeyMeta, KeyRecord, SecretHash};
 
@@ -336,41 +336,6 @@ impl AccountStore for DynamoAccountStore {
             }
             Err(err) => Err(StoreError::Storage(err.to_string())),
         }
-    }
-
-    async fn admin_credit(&self, account_id: &AccountId, invokes: u64) -> Result<u64, StoreError> {
-        if invokes == 0 {
-            return Err(StoreError::Storage(
-                "admin credit requires a positive invoke count".into(),
-            ));
-        }
-        let out = self
-            .client
-            .update_item()
-            .table_name(&self.accounts)
-            .key(ACCOUNT_ID, AttributeValue::S(account_id.to_hex()))
-            .update_expression("SET balance = balance + :n")
-            .condition_expression("attribute_exists(#id)")
-            .expression_attribute_names("#id", ACCOUNT_ID)
-            .expression_attribute_values(":n", n(invokes))
-            .return_values(ReturnValue::UpdatedNew)
-            .send()
-            .await
-            .map_err(|err| {
-                if err
-                    .as_service_error()
-                    .map(|e| e.is_conditional_check_failed_exception())
-                    .unwrap_or(false)
-                {
-                    StoreError::NotFound
-                } else {
-                    StoreError::Storage(err.to_string())
-                }
-            })?;
-        let item = out.attributes().ok_or_else(|| {
-            StoreError::Storage("admin credit did not return the new balance".into())
-        })?;
-        attr_u64(item, BALANCE)
     }
 }
 

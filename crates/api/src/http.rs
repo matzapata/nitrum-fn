@@ -321,7 +321,6 @@ mod tests {
         Arc::new(Accounts::new(
             ledger,
             Arc::new(IdleSettler),
-            "",
             "http://api.test",
         ))
     }
@@ -441,7 +440,7 @@ mod tests {
         let secret = issued.secret.as_str().to_string();
         ledger.create(&account, &issued.record).await.unwrap();
         if balance > 0 {
-            ledger.admin_credit(&account.id, balance).await.unwrap();
+            ledger.credit(&account.id, balance, "fund").await.unwrap();
         }
         (ledger, secret)
     }

@@ -55,7 +55,7 @@ pub enum AppError {
     #[error("attestation: {0}")]
     Attestation(String),
 
-    /// Missing, unknown, or revoked bearer, or a bad operator credential.
+    /// Missing, unknown, or revoked bearer.
     #[error("unauthorized")]
     Unauthorized,
 

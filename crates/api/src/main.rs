@@ -73,7 +73,6 @@ async fn main() -> Result<()> {
     let accounts = Arc::new(Accounts::new(
         account_store,
         Arc::new(settler),
-        config.operator_token.clone(),
         config.billing.api_public_url.clone(),
     ));
     let runner: Arc<dyn FunctionRunner> =

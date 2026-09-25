@@ -206,11 +206,19 @@ Local config sets `min_deploy_credits: 0` and `invoke_credit_cost: 0`, so publis
 nitrum-fn account create
 # account_id=… key_id=… secret=nfk_… balance=0
 
-nitrum-fn account credit --account "$ACCOUNT" --invokes 100
-# signs the x402 retry; the body is {"invokes":100}, not a USDC amount
+nitrum-fn account credit --account "$ACCOUNT" --invokes 100 --max-usdc 1000000
+# prints the quoted price, then signs the x402 retry
 ```
 
-`NITRUM_FN_OPERATOR_TOKEN` on the API authorizes `POST /accounts/{id}/admin-credit`, which adds invoke credits with no x402 payment.
+The request body is `{"invokes":100}`, not a USDC amount. The API quotes the price in its 402 challenge and the CLI shows it (amount, `payTo`, network, asset) before signing. `--max-usdc` (atomic USDC) refuses any higher quote and skips the prompt. Without it the CLI asks on a terminal, and a script must pass `--max-usdc` or `--yes`.
+
+Locally, `config/shared/local.yaml` points at a mock facilitator. It accepts every settle, so `account credit` runs the real x402 path with no chain and no funds. Start it next to the API, and sign with any 32-byte key (this one is the public Hardhat test key):
+
+```bash
+make facilitator   # tests/mocks/facilitator.sh, on 127.0.0.1:4402
+export NITRUM_FN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+nitrum-fn account credit --account "$ACCOUNT" --invokes 100 --max-usdc 1000000
+```
 
 CLI talks to the **API** (`NITRUM_FN_URL`, default `http://127.0.0.1:8080`). It `PUT`s the wasm; the catalog row is written before the response. Pass `--api-key` / `NITRUM_FN_API_KEY` when the deploy minimum is above zero. The flag is optional locally.
 
@@ -474,7 +482,6 @@ cargo run -p cli -- --help
 | `NITRUM_FN_API_KEY` | Bearer on `deploy` and `invoke` |
 | `NITRUM_FN_PRIVATE_KEY` | Signs the x402 retry for `account credit` |
 | `NITRUM_FN_PCR0` | Invoke PCR0 pin |
-| `NITRUM_FN_OPERATOR_TOKEN` | API admin credit. Not a caller flag. |
 
 ## Examples
 
@@ -484,4 +491,4 @@ cargo run -p cli -- --help
 | `examples/oracle/enclave` | Allowlisted CoinGecko GET, canonical body |
 | `examples/oracle/contracts` | Foundry consumer of the attested body |
 
-Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `bash tests/e2e/local.sh` overrides the local zeros (cost 1, funded with admin credit) / `./tests/e2e/cloud.sh`.
+Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `bash tests/e2e/local.sh` overrides the local zeros (cost 1, funded with `account credit` via the mock facilitator) / `./tests/e2e/cloud.sh`.
