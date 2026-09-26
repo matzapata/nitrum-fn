@@ -58,6 +58,14 @@ pub trait AccountStore: Send + Sync {
     /// Add `receipt.cost` back after a failure before the guest runs.
     async fn refund(&self, receipt: &DebitReceipt) -> Result<(), StoreError>;
 
+    /// The current balance when `nonce` was already credited to `account_id`,
+    /// else `None`. Lets callers skip settling a payment that is already applied.
+    async fn credited_balance(
+        &self,
+        account_id: &AccountId,
+        nonce: &str,
+    ) -> Result<Option<u64>, StoreError>;
+
     /// Add `invokes` credits once per `nonce`. A replay does not add them again
     /// and does not change any key cap.
     async fn credit(

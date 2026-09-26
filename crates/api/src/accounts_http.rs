@@ -237,6 +237,10 @@ mod tests {
             })
         }
 
+        async fn payment_nonce(&self, _invokes: u64, header: &str) -> Result<String, AppError> {
+            Ok(header.to_string())
+        }
+
         async fn settle(
             &self,
             _account_id: &AccountId,

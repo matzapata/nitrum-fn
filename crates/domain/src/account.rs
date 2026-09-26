@@ -207,14 +207,15 @@ impl NewKey {
     }
 }
 
-/// A further key may be issued only when `presented` is a non-revoked bearer
-/// for `account_id`.
+/// Keys may be issued or revoked only when `presented` is a non-revoked,
+/// uncapped bearer for `account_id`. A spend-capped key must not be able to
+/// mint an uncapped one or revoke the owner's keys.
 pub fn authorize_additional_key(
     account_id: &AccountId,
     presented: Option<&KeyRecord>,
 ) -> Result<(), DomainError> {
     match presented {
-        Some(key) if !key.revoked && &key.account_id == account_id => Ok(()),
+        Some(key) if !key.revoked && !key.capped && &key.account_id == account_id => Ok(()),
         _ => Err(DomainError::NotKeyHolder),
     }
 }
@@ -274,8 +275,14 @@ mod tests {
     #[test]
     fn second_issue_requires_an_existing_non_revoked_bearer() {
         let account = Account::open().expect("account");
-        let first = NewKey::issue(account.id.clone(), Some(5)).expect("first");
+        let first = NewKey::issue(account.id.clone(), None).expect("first");
         assert!(authorize_additional_key(&account.id, None).is_err());
+
+        let capped = NewKey::issue(account.id.clone(), Some(5)).expect("capped");
+        assert!(
+            authorize_additional_key(&account.id, Some(&capped.record)).is_err(),
+            "a spend-capped key must not issue or revoke keys"
+        );
 
         let mut revoked = first.record.clone();
         revoked.revoked = true;

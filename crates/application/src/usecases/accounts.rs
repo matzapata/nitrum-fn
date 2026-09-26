@@ -9,6 +9,8 @@ use tracing::instrument;
 use crate::error::AppError;
 use crate::ports::{AccountStore, CreditSettler, StoreError};
 
+const CREDIT_ATTEMPTS: u32 = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedAccount {
     pub account_id: AccountId,
@@ -147,9 +149,42 @@ impl Accounts {
                 network: challenge.network,
             });
         };
+        // A retried request whose first attempt settled and credited must not
+        // go back to the facilitator, which rejects a spent authorization.
+        let nonce = self.settler.payment_nonce(invokes, header).await?;
+        if let Some(balance) = self.store.credited_balance(account_id, &nonce).await? {
+            return Ok(balance);
+        }
         let nonce = self.settler.settle(account_id, invokes, header).await?;
-        let outcome = self.store.credit(account_id, invokes, &nonce).await?;
-        Ok(outcome.balance())
+        self.credit_settled(account_id, invokes, &nonce).await
+    }
+
+    /// The payment has settled on-chain, so a transient store failure must not
+    /// drop the credit. Retry storage errors, then log what is needed to
+    /// reconcile by hand.
+    async fn credit_settled(
+        &self,
+        account_id: &AccountId,
+        invokes: u64,
+        nonce: &str,
+    ) -> Result<u64, AppError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.store.credit(account_id, invokes, nonce).await {
+                Ok(outcome) => return Ok(outcome.balance()),
+                Err(StoreError::Storage(msg)) if attempt < CREDIT_ATTEMPTS => {
+                    tracing::warn!(%account_id, nonce, attempt, "credit after settle failed, retrying: {msg}");
+                }
+                Err(err) => {
+                    tracing::error!(
+                        %account_id, nonce, invokes,
+                        "payment settled but the credit was not applied: {err:?}"
+                    );
+                    return Err(err.into());
+                }
+            }
+        }
     }
 
     pub fn credit_url(&self, account_id: &AccountId) -> String {
@@ -210,6 +245,8 @@ mod tests {
         keys: Mutex<HashMap<String, KeyRecord>>,
         receipts: Mutex<HashMap<String, u64>>,
         credits: Mutex<u32>,
+        /// Number of upcoming `credit` calls that fail with a storage error.
+        credit_failures: Mutex<u32>,
     }
 
     impl MemStore {
@@ -219,6 +256,7 @@ mod tests {
                 keys: Mutex::new(HashMap::new()),
                 receipts: Mutex::new(HashMap::new()),
                 credits: Mutex::new(0),
+                credit_failures: Mutex::new(0),
             }
         }
     }
@@ -286,12 +324,30 @@ mod tests {
             unimplemented!()
         }
 
+        async fn credited_balance(
+            &self,
+            account_id: &AccountId,
+            nonce: &str,
+        ) -> Result<Option<u64>, StoreError> {
+            if !self.receipts.lock().unwrap().contains_key(nonce) {
+                return Ok(None);
+            }
+            Ok(self.account(account_id).await?.map(|a| a.balance))
+        }
+
         async fn credit(
             &self,
             account_id: &AccountId,
             invokes: u64,
             nonce: &str,
         ) -> Result<CreditOutcome, StoreError> {
+            {
+                let mut failures = self.credit_failures.lock().unwrap();
+                if *failures > 0 {
+                    *failures -= 1;
+                    return Err(StoreError::Storage("throttled".into()));
+                }
+            }
             if self.receipts.lock().unwrap().contains_key(nonce) {
                 let balance = self
                     .account(account_id)
@@ -336,6 +392,10 @@ mod tests {
                 resource: format!("/accounts/{account_id}/credit"),
                 network: "base".into(),
             })
+        }
+
+        async fn payment_nonce(&self, _invokes: u64, header: &str) -> Result<String, AppError> {
+            Ok(header.to_string())
         }
 
         async fn settle(
@@ -428,5 +488,77 @@ mod tests {
                 .balance,
             0
         );
+    }
+
+    #[tokio::test]
+    async fn capped_key_cannot_issue_or_revoke_keys() {
+        let store = Arc::new(MemStore::new());
+        let accounts = service(
+            store.clone(),
+            Arc::new(Settler {
+                fail: false,
+                calls: Mutex::new(0),
+            }),
+        );
+        let created = accounts.create().await.expect("create");
+        let capped = accounts
+            .issue_key(&created.account_id, Some(&created.secret), Some(5))
+            .await
+            .expect("capped key");
+
+        let err = accounts
+            .issue_key(&created.account_id, Some(&capped.secret), None)
+            .await
+            .expect_err("capped issuer");
+        assert!(matches!(err, AppError::Unauthorized), "{err}");
+        let err = accounts
+            .revoke(&created.account_id, &created.key_id, Some(&capped.secret))
+            .await
+            .expect_err("capped revoker");
+        assert!(matches!(err, AppError::Unauthorized), "{err}");
+        assert_eq!(store.list_keys(&created.account_id).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn transient_store_failure_after_settle_is_retried() {
+        let store = Arc::new(MemStore::new());
+        let settler = Arc::new(Settler {
+            fail: false,
+            calls: Mutex::new(0),
+        });
+        let accounts = service(store.clone(), settler.clone());
+        let created = accounts.create().await.expect("create");
+        *store.credit_failures.lock().unwrap() = 2;
+
+        let balance = accounts
+            .credit(&created.account_id, 3, Some("nonce-1"))
+            .await
+            .expect("credit");
+        assert_eq!(balance, 3);
+        assert_eq!(*settler.calls.lock().unwrap(), 1);
+        assert_eq!(*store.credits.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_of_a_credited_payment_does_not_settle_again() {
+        let store = Arc::new(MemStore::new());
+        let settler = Arc::new(Settler {
+            fail: false,
+            calls: Mutex::new(0),
+        });
+        let accounts = service(store.clone(), settler.clone());
+        let created = accounts.create().await.expect("create");
+
+        let first = accounts
+            .credit(&created.account_id, 3, Some("nonce-1"))
+            .await
+            .expect("first");
+        let second = accounts
+            .credit(&created.account_id, 3, Some("nonce-1"))
+            .await
+            .expect("retry");
+        assert_eq!((first, second), (3, 3));
+        assert_eq!(*settler.calls.lock().unwrap(), 1);
+        assert_eq!(*store.credits.lock().unwrap(), 1);
     }
 }

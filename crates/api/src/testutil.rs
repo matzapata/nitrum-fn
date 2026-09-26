@@ -133,6 +133,18 @@ impl AccountStore for MemLedger {
         Ok(())
     }
 
+    async fn credited_balance(
+        &self,
+        account_id: &AccountId,
+        nonce: &str,
+    ) -> Result<Option<u64>, StoreError> {
+        let g = self.inner.lock().unwrap();
+        if !g.receipts.contains_key(nonce) {
+            return Ok(None);
+        }
+        Ok(g.accounts.get(&account_id.to_hex()).map(|a| a.balance))
+    }
+
     async fn credit(
         &self,
         account_id: &AccountId,

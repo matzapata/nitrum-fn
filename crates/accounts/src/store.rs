@@ -286,6 +286,17 @@ impl AccountStore for DynamoAccountStore {
         Ok(())
     }
 
+    async fn credited_balance(
+        &self,
+        account_id: &AccountId,
+        nonce: &str,
+    ) -> Result<Option<u64>, StoreError> {
+        if !self.receipt_exists(nonce).await? {
+            return Ok(None);
+        }
+        Ok(Some(self.balance_of(account_id).await?))
+    }
+
     async fn credit(
         &self,
         account_id: &AccountId,

@@ -312,6 +312,9 @@ mod tests {
         ) -> Result<application::ports::PaymentChallenge, AppError> {
             Err(AppError::Storage("settler unused".into()))
         }
+        async fn payment_nonce(&self, _: u64, _: &str) -> Result<String, AppError> {
+            Err(AppError::Storage("settler unused".into()))
+        }
         async fn settle(&self, _: &domain::AccountId, _: u64, _: &str) -> Result<String, AppError> {
             Err(AppError::Storage("settler unused".into()))
         }

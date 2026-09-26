@@ -199,6 +199,13 @@ impl<F: Facilitator> CreditSettler for X402Settler<F> {
         })
     }
 
+    async fn payment_nonce(&self, invokes: u64, payment_header: &str) -> Result<String, AppError> {
+        let requirements = self.requirements(invokes).map_err(payment_to_app)?;
+        let auth = parse_payment(payment_header).map_err(payment_to_app)?;
+        check_exact(&auth, &requirements, (self.now)()).map_err(payment_to_app)?;
+        Ok(auth.nonce)
+    }
+
     async fn settle(
         &self,
         account_id: &AccountId,
@@ -206,9 +213,7 @@ impl<F: Facilitator> CreditSettler for X402Settler<F> {
         payment_header: &str,
     ) -> Result<String, AppError> {
         let requirements = self.requirements(invokes).map_err(payment_to_app)?;
-        let auth = parse_payment(payment_header).map_err(payment_to_app)?;
-        check_exact(&auth, &requirements, (self.now)()).map_err(payment_to_app)?;
-        let nonce = auth.nonce.clone();
+        let nonce = self.payment_nonce(invokes, payment_header).await?;
         let resource = self.resource(account_id);
         apply_after_settle(
             self.facilitator

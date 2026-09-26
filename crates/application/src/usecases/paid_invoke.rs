@@ -221,6 +221,13 @@ mod tests {
             }
             Ok(())
         }
+        async fn credited_balance(
+            &self,
+            _: &AccountId,
+            _: &str,
+        ) -> Result<Option<u64>, StoreError> {
+            unimplemented!()
+        }
         async fn credit(
             &self,
             _: &AccountId,
