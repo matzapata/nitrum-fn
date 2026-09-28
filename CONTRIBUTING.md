@@ -27,7 +27,7 @@ Matches `[.github/workflows/ci.yml](.github/workflows/ci.yml)`:
 | `make audit`              | `cargo audit`                                       |
 | `make test`               | `cargo test --workspace --lib --bins`               |
 | `make adapters`           | Floci + catalog/artifacts integration tests         |
-| `bash tests/e2e/local.sh` | local publish + invoke                              |
+| `bash tests/e2e/local.sh` | local billed publish + invoke (x402 credit, mock)    |
 | `make ci`                 | `check` + `audit` + `test` + `adapters` + local e2e |
 
 ## Local stack
@@ -47,6 +47,8 @@ Then:
 ```bash
 ./examples/hello-world/e2e.sh
 ```
+
+To buy credits locally, run the mock x402 facilitator (`make facilitator`) and use `nitrum-fn account credit`; see [usage](docs/usage.md#deploy).
 
 Automated platform smoke (`nitrum-fn new` → build → deploy → invoke): `bash tests/e2e/local.sh`. Tear down emulators: `make stack-down`.
 

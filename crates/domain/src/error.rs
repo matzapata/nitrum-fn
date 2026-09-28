@@ -16,4 +16,19 @@ pub enum DomainError {
 
     #[error("too many egress origins (max {max})")]
     TooManyEgressOrigins { max: usize },
+
+    #[error("invalid account id")]
+    InvalidAccountId,
+
+    #[error("invalid key id")]
+    InvalidKeyId,
+
+    #[error("invalid bearer")]
+    InvalidBearer,
+
+    #[error("bearer is not a non-revoked key for this account")]
+    NotKeyHolder,
+
+    #[error("entropy unavailable")]
+    Entropy,
 }

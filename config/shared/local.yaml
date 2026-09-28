@@ -6,3 +6,20 @@ catalog:
   table: nitrum-fn-catalog
   publish_lock_table: nitrum-fn-publish-lock
   endpoint: http://127.0.0.1:4566
+
+accounts:
+  table: nitrum-fn-accounts
+  keys_table: nitrum-fn-keys
+  receipts_table: nitrum-fn-credit-receipts
+  endpoint: http://127.0.0.1:4566
+
+billing:
+  usdc_per_invoke: 10000
+  min_deploy_credits: 0
+  invoke_credit_cost: 0
+  pay_to: "0x0000000000000000000000000000000000000001"
+  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  network: base
+  # Mock facilitator: `make facilitator` (tests/mocks/facilitator.sh). Accepts every settle.
+  facilitator_url: http://127.0.0.1:4402
+  api_public_url: http://127.0.0.1:8080

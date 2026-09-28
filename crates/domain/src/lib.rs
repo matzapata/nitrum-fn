@@ -1,11 +1,16 @@
 //! Pure domain types for nitrum-fn.
 
+mod account;
 mod error;
 mod function;
 mod invoke;
 mod limits;
 mod publish;
 
+pub use account::{
+    authorize_additional_key, Account, AccountId, BearerSecret, KeyId, KeyMeta, KeyRecord, NewKey,
+    SecretHash,
+};
 pub use error::DomainError;
 pub use function::{
     normalize_egress_allow, ContentHash, EgressOrigin, FunctionId, FunctionVersion, VersionLabel,

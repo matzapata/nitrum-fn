@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+    # Name collision, not our code. The advisory covers NLnet Labs' `domain` DNS
+    # crate on crates.io. `domain` here is the workspace crate at crates/domain.
+    "RUSTSEC-2026-0310",
+]

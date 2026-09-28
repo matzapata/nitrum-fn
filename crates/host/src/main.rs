@@ -7,9 +7,10 @@ mod state;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use accounts::DynamoAccountStore;
 use anyhow::{Context, Result};
 use application::ports::{ArtifactStore, FunctionAttestor, FunctionCatalog, FunctionRunner};
-use application::InvokeFunction;
+use application::{InvokeFunction, PaidInvoke};
 use artifacts::S3ArtifactStore;
 use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::Client as DdbClient;
@@ -37,12 +38,12 @@ async fn main() -> Result<()> {
     // Build AWS clients.
     let sdk = load_aws_config().await;
     let bucket = config.artifacts.bucket.clone();
-    let s3 = build_s3_client(&sdk, config.artifacts.endpoint.as_deref())?;
-    let ddb = build_ddb_client(&sdk, config.catalog.endpoint.as_deref())?;
+    let s3 = s3_client(&sdk, config.artifacts.endpoint.as_deref());
+    let ddb = dynamodb_client(&sdk, config.catalog.endpoint.as_deref());
 
     // Build application services.
     let catalog: Arc<dyn FunctionCatalog> = Arc::new(DynamoDbFunctionCatalog::new(
-        ddb,
+        ddb.clone(),
         config.catalog.table.clone(),
     ));
     let artifacts: Arc<dyn ArtifactStore> = Arc::new(S3ArtifactStore::new(
@@ -61,8 +62,24 @@ async fn main() -> Result<()> {
         Arc::new(NitrumCryptoAttestor::new().context("nitrum crypto attestor")?)
     };
 
-    // Build invoke usecase.
-    let invoke = Arc::new(InvokeFunction::new(catalog, artifacts, runner));
+    let account_endpoint = config
+        .accounts
+        .endpoint
+        .as_deref()
+        .or(config.catalog.endpoint.as_deref());
+    let accounts = Arc::new(DynamoAccountStore::new(
+        dynamodb_client(&sdk, account_endpoint),
+        config.accounts.table.clone(),
+        config.accounts.keys_table.clone(),
+        config.accounts.receipts_table.clone(),
+    ));
+    // Debit before InvokeFunction::execute. Cost zero skips the bearer.
+    let invoke = Arc::new(PaidInvoke::new(
+        config.billing.invoke_credit_cost,
+        config.billing.api_public_url.clone(),
+        accounts,
+        InvokeFunction::new(catalog, artifacts, runner),
+    ));
 
     // Build HTTP router.
     let app = http::router(AppState { invoke, attestor });
@@ -102,20 +119,20 @@ async fn load_aws_config() -> aws_config::SdkConfig {
         .await
 }
 
-fn build_s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<S3Client> {
+fn s3_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> S3Client {
     let mut builder = S3ConfigBuilder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url).force_path_style(true);
     }
-    Ok(S3Client::from_conf(builder.build()))
+    S3Client::from_conf(builder.build())
 }
 
-fn build_ddb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> Result<DdbClient> {
+fn dynamodb_client(sdk: &aws_config::SdkConfig, endpoint: Option<&str>) -> DdbClient {
     let mut builder = aws_sdk_dynamodb::config::Builder::from(sdk);
     if let Some(url) = endpoint {
         builder = builder.endpoint_url(url);
     }
-    Ok(DdbClient::from_conf(builder.build()))
+    DdbClient::from_conf(builder.build())
 }
 
 async fn shutdown_signal() {

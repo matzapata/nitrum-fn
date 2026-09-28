@@ -23,6 +23,21 @@ variable "publish_lock_table_name" {
   description = "DynamoDB publish-lock table name from config/shared/{run_env}.yaml (catalog.publish_lock_table)."
 }
 
+variable "accounts_table_name" {
+  type        = string
+  description = "DynamoDB accounts table name from config/shared/{run_env}.yaml (accounts.table)."
+}
+
+variable "keys_table_name" {
+  type        = string
+  description = "DynamoDB bearer-keys table name from config/shared/{run_env}.yaml (accounts.keys_table)."
+}
+
+variable "receipts_table_name" {
+  type        = string
+  description = "DynamoDB credit-receipt table name from config/shared/{run_env}.yaml (accounts.receipts_table)."
+}
+
 variable "run_env" {
   type        = string
   description = "NITRUM_FN_ENV overlay name reinjected via SSM for the enclave host (e.g. staging, prod)."

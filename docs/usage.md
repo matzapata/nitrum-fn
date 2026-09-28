@@ -198,7 +198,29 @@ Same value as `shasum -a 256` and as response header `x-nitrum-fn-shasum`.
 
 ## Deploy
 
-CLI talks to the **API** (`NITRUM_FN_URL`, default `http://127.0.0.1:8080`). It `PUT`s the wasm; the catalog row is written before the response.
+An account balance is a count of **invoke credits**. The platform config `usdc_per_invoke` is what one credit costs in atomic USDC (6 decimals). Buying credits is `POST /accounts/{id}/credit` on the management API (x402). Invoke does not take a payment signature. The platform keeps the USDC.
+
+Local config sets `min_deploy_credits: 0` and `invoke_credit_cost: 0`, so publish and invoke stay open with no bearer. Staging and prod set the deploy minimum to `1000000` and the invoke cost to `1`. Publish checks that minimum and does not debit. Invoke debits the cost.
+
+```bash
+nitrum-fn account create
+# account_id=… key_id=… secret=nfk_… balance=0
+
+nitrum-fn account credit --account "$ACCOUNT" --invokes 100 --max-usdc 1000000
+# prints the quoted price, then signs the x402 retry
+```
+
+The request body is `{"invokes":100}`, not a USDC amount. The API quotes the price in its 402 challenge and the CLI shows it (amount, `payTo`, network, asset) before signing. `--max-usdc` (atomic USDC) refuses any higher quote and skips the prompt. Without it the CLI asks on a terminal, and a script must pass `--max-usdc` or `--yes`.
+
+Locally, `config/shared/local.yaml` points at a mock facilitator. It accepts every settle, so `account credit` runs the real x402 path with no chain and no funds. Start it next to the API, and sign with any 32-byte key (this one is the public Hardhat test key):
+
+```bash
+make facilitator   # tests/mocks/facilitator.sh, on 127.0.0.1:4402
+export NITRUM_FN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+nitrum-fn account credit --account "$ACCOUNT" --invokes 100 --max-usdc 1000000
+```
+
+CLI talks to the **API** (`NITRUM_FN_URL`, default `http://127.0.0.1:8080`). It `PUT`s the wasm; the catalog row is written before the response. Pass `--api-key` / `NITRUM_FN_API_KEY` when the deploy minimum is above zero. The flag is optional locally.
 
 ```bash
 cargo run -p cli -- deploy ./hello_world.wasm --name hello-world
@@ -245,6 +267,7 @@ HASH=$(cargo run -p cli --quiet -- describe ./hello_world.wasm \
   | awk -F= '/^hash=/{print $2}')
 
 cargo run -p cli -- invoke hello-world -d '{}' --fn-shasum "$HASH"
+# when invoke_credit_cost is above zero, add --api-key "$SECRET" or export NITRUM_FN_API_KEY
 ```
 
 Staging enclave (self-signed cert until ACME is on):
@@ -270,6 +293,7 @@ cargo run -p cli -- invoke hello-world \
 | `--fn-shasum` | Require `x-nitrum-fn-shasum` to match |
 | `--pcr0` / `NITRUM_FN_PCR0` | Verify Nitro document (requires `--fn-shasum`) |
 | `--attestation-out FILE` | Write raw COSE Sign1 bytes (requires `--pcr0`; stdout stays the body) |
+| `--api-key` / `NITRUM_FN_API_KEY` | `Authorization: Bearer` on invoke and deploy. No payment signature. |
 
 `--pcr0` always sends a fresh 32-byte nonce as `x-nitrum-fn-nonce`. Local host has no NSM: omit `--pcr0`.
 
@@ -278,9 +302,12 @@ cargo run -p cli -- invoke hello-world \
 ```http
 POST /invoke/{name}
 Content-Type: application/json
+Authorization: Bearer nfk_…
 x-nitrum-fn-version: latest
 x-nitrum-fn-nonce: <base64 16–32 bytes>
 ```
+
+Omit `Authorization` when `invoke_credit_cost` is zero. A billed call with too few credits is HTTP 402 JSON (`error`, `credit_cost`, `balance`, `credit_url`) and no `PAYMENT-REQUIRED` header. Attestation still binds only `sha256(wasm) || sha256(body)`.
 
 Success headers:
 
@@ -441,6 +468,7 @@ Full operator notes: [`examples/oracle/README.md`](../examples/oracle/README.md)
 nitrum-fn --help
 nitrum-fn new --help
 nitrum-fn deploy --help
+nitrum-fn account --help
 nitrum-fn invoke --help
 
 # in this repo:
@@ -449,8 +477,10 @@ cargo run -p cli -- --help
 
 | Env | Used by |
 | --- | --- |
-| `NITRUM_FN_URL` | `deploy` API base (default `http://127.0.0.1:8080`) |
+| `NITRUM_FN_URL` | `deploy` and `account` API base (default `http://127.0.0.1:8080`) |
 | `NITRUM_FN_INVOKE_URL` | `invoke` host base (default `http://127.0.0.1:8081`) |
+| `NITRUM_FN_API_KEY` | Bearer on `deploy` and `invoke` |
+| `NITRUM_FN_PRIVATE_KEY` | Signs the x402 retry for `account credit` |
 | `NITRUM_FN_PCR0` | Invoke PCR0 pin |
 
 ## Examples
@@ -461,4 +491,4 @@ cargo run -p cli -- --help
 | `examples/oracle/enclave` | Allowlisted CoinGecko GET, canonical body |
 | `examples/oracle/contracts` | Foundry consumer of the attested body |
 
-Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `bash tests/e2e/local.sh` / `./tests/e2e/cloud.sh`.
+Local stack (API + host): [CONTRIBUTING.md](../CONTRIBUTING.md). End-to-end: `bash tests/e2e/local.sh` overrides the local zeros (cost 1, funded with `account credit` via the mock facilitator) / `./tests/e2e/cloud.sh`.

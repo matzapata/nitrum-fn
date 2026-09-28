@@ -54,6 +54,38 @@ pub enum AppError {
     /// Enclave attestation (NSM / crypto API) failed.
     #[error("attestation: {0}")]
     Attestation(String),
+
+    /// Missing, unknown, or revoked bearer.
+    #[error("unauthorized")]
+    Unauthorized,
+
+    /// Invoke or deploy refused because the credit balance or spend cap is too low.
+    #[error("insufficient invoke credits")]
+    InsufficientCredits {
+        credit_cost: u64,
+        balance: u64,
+        credit_url: String,
+        spend_cap_remaining: Option<u64>,
+    },
+
+    /// Publish refused because the balance is under the deploy minimum. Balance is unchanged.
+    #[error("balance below minimum deploy credits")]
+    DeployMinimum {
+        min_deploy_credits: u64,
+        balance: u64,
+        credit_url: String,
+    },
+
+    /// x402 challenge for buying invoke credits. Not used on the invoke host.
+    #[error("payment required")]
+    PaymentChallenge {
+        invokes: u64,
+        amount: u64,
+        asset: String,
+        pay_to: String,
+        resource: String,
+        network: String,
+    },
 }
 
 impl AppError {

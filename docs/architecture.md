@@ -2,7 +2,7 @@
 
 `nitrum-fn` is a pay-per-invoke WASM functions product that runs on [Nitrum](https://github.com/matzapata/nitrum) Nitro enclaves. Developers publish a `.wasm`. Callers hit `POST /invoke/{fn}` over TLS that terminates **inside** the enclave. The host runs the guest in Wasmtime.
 
-Nitrum is the platform (EIF, TLS, attestation, ASG/NLB, KMS). This repo is the WASM host, catalog, publish pipeline, CLI, and later payments.
+Nitrum is the platform (EIF, TLS, attestation, ASG/NLB, KMS). This repo is the WASM host, catalog, publish pipeline, CLI, and the x402 credit route on the management API.
 
 ```mermaid
 flowchart LR
@@ -153,8 +153,9 @@ nitrum-fn/
 │   ├── host/            # enclave start_command — HTTP /invoke
 │   ├── api/             # deploy / management (validate + store + catalog)
 │   ├── telemetry/       # OTel init shared by bins
-│   ├── cli/             # talks to api
-│   └── payments/        # x402 (later)
+│   ├── cli/             # talks to api and host
+│   ├── accounts/        # invoke-credit ledger (DynamoDB)
+│   └── payments/        # x402 exact check + facilitator settle (API only)
 └── examples/
     ├── hello-world/
     └── oracle/              # enclave guest + Foundry on-chain consumer
@@ -169,9 +170,10 @@ Talks to the API and the host. It never runs wasm.
 | Command    | Role                                                               |
 | ---------- | ------------------------------------------------------------------ |
 | `new`      | Scaffold a hello-world guest crate from `crates/cli/template`      |
-| `deploy`   | `PUT` the `.wasm`         |
+| `deploy`   | `PUT` the `.wasm`. Sends the bearer when `min_deploy_credits` is above zero. Does not debit. |
 | `describe` | sha256 of a local `.wasm` (same value as `x-nitrum-fn-shasum`)     |
-| `invoke`   | `POST /invoke/{name}`; optional hash pin, PCR0, attestation verify |
+| `invoke`   | `POST /invoke/{name}` with `Authorization: Bearer` when billing is on. No payment signature. |
+| `account`  | `create` prints a bearer once. `credit --invokes N` buys N credits; the API prices the USDC. |
 
 ### Management API (`crates/api`)
 
@@ -180,8 +182,15 @@ Fargate composition root. Hexagonal use case: `PublishFunction`.
 | Method | Path                | Purpose                                              |
 | ------ | ------------------- | ---------------------------------------------------- |
 | `GET`  | `/healthz`          | Liveness                                             |
-| `PUT`  | `/functions/{name}` | Validate wasm (no Cranelift), store, upsert catalog  |
+| `PUT`  | `/functions/{name}` | Validate wasm (no Cranelift), store, upsert catalog. When `min_deploy_credits` is above zero, requires a bearer whose balance is at least that minimum and does not debit. Zero leaves publish open. |
 | `GET`  | `/functions/{name}` | Resolve `latest` (hash + egress allowlist)           |
+| `POST` | `/accounts` | Open an account and its first bearer. Balance starts at zero invoke credits. |
+| `POST` | `/accounts/{id}/keys` | Issue another key. Requires that account's bearer. |
+| `POST` | `/accounts/{id}/keys/{key_id}/revoke` | Revoke a key. Balance stays. |
+| `GET`  | `/accounts/{id}` | Holder reads the invoke-credit balance and key metadata. No secrets. |
+| `POST` | `/accounts/{id}/credit` | Body `{ "invokes": N }`. x402 `exact` challenge for `N * usdc_per_invoke` atomic USDC to the platform `payTo`. After the facilitator settles, the balance increases by N. |
+
+x402 exists only on `POST /accounts/{id}/credit`. The invoke host does not call the facilitator and does not send a payment challenge. The platform keeps the USDC. Publishers are not paid. `usdc_per_invoke` is platform config, not a request field and not a catalog price.
 
 `PUT` returns `200` with `status: "ready"` once the catalog row is written. Concurrent publish of the same name is `409`.
 
@@ -189,13 +198,15 @@ Allowlist travels as repeated `x-nitrum-fn-allow-url` headers, not in the wasm b
 
 ### Host (`crates/host`)
 
-Enclave `start_command`. Hexagonal use case: `InvokeFunction`.
+Enclave `start_command`. `PaidInvoke` debits the configured credit cost, then `InvokeFunction` runs the wasm. The host crate does not depend on `payments`.
 
 - `GET /healthz`
 - `POST /invoke/{name}` — body limit 1 MiB
 - Optional `x-nitrum-fn-version` (default `latest`)
 - Optional `x-nitrum-fn-nonce` (16–32 bytes, base64) → mint attestation
 - Always sets `x-nitrum-fn-shasum` to sha256 of the wasm it compiled
+- When `invoke_credit_cost` is above zero, requires `Authorization: Bearer` and debits that many invoke credits before the guest runs. Cost zero does not look up a bearer. An underfunded call is HTTP 402 JSON (`credit_cost`, `balance`, `credit_url`) with no x402 header. Artifact or compile failure refunds the debit. A guest response, including 4xx, stays paid.
+- Attestation `user_data` stays `sha256(wasm) || sha256(body)`. It does not cover the credit cost or the payer.
 
 Local (`NITRUM_FN_ENV=local`): `NoopAttestor` — no Nitro document. Cloud: `NitrumCryptoAttestor` calls the data-plane loopback `POST http://127.0.0.1:3000/attestation`.
 

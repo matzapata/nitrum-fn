@@ -17,6 +17,8 @@ clap = { workspace = true }
 domain = { workspace = true }
 getrandom = "0.3"
 hex = { workspace = true }
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
 idna_adapter = { workspace = true }
 nitrum-verify = { package = "verify", git = "https://github.com/matzapata/nitrum", branch = "develop" }
 reqwest = { workspace = true }

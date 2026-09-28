@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use application::ports::FunctionAttestor;
-use application::InvokeFunction;
+use application::PaidInvoke;
 use domain::ContentHash;
 
 use crate::http::invoke_user_data;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub invoke: Arc<InvokeFunction>,
+    pub invoke: Arc<PaidInvoke>,
     pub attestor: Arc<dyn FunctionAttestor>,
 }
 
